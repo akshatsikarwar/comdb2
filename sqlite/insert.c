@@ -500,7 +500,8 @@ void sqlite3Insert(
   SrcList *pTabList,    /* Name of table into which we are inserting */
   Select *pSelect,      /* A SELECT statement to use as the data source */
   IdList *pColumn,      /* Column names corresponding to IDLIST. */
-  int onError           /* How to handle constraint errors */
+  int onError,          /* How to handle constraint errors */
+  Token *genid
 ){
   sqlite3 *db;          /* The main database structure */
   Table *pTab;          /* The table to insert into.  aka TABLE */
@@ -956,6 +957,14 @@ void sqlite3Insert(
     }else if( IsVirtual(pTab) || withoutRowid ){
       sqlite3VdbeAddOp2(v, OP_Null, 0, regRowid);
     }else{
+      if (genid) {
+          void have_real_genid(Vdbe *, const char *);
+          if (genid->n != 19) {
+              sqlite3ErrorMsg(pParse, "bad genid:%.*s", genid->n, genid->z);
+              goto insert_cleanup;
+          }
+          have_real_genid(v, genid->z);
+      }
       sqlite3VdbeAddOp3(v, OP_NewRowid, iDataCur, regRowid, regAutoinc);
       appendFlag = 1;
     }

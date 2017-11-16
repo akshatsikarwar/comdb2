@@ -390,7 +390,8 @@ int static dbqueue_add_consumer_int(struct dbtable *db, int consumern,
     if (checkonly) {
         if (strncmp(method, "fstsnd:", 7) != 0 &&
             strncmp(method, "lua:", 4) != 0 &&
-            strncmp(method, "dynlua:", 7) != 0) {
+            strncmp(method, "dynlua:", 7) != 0 &&
+            strncmp(method, "rep:", 4) != 0) {
             logmsg(LOGMSG_ERROR, "Unsupported method: %s\n", method);
             rc = -1;
             goto done;
@@ -465,6 +466,14 @@ int static dbqueue_add_consumer_int(struct dbtable *db, int consumern,
     } else if (strncmp(method, "dynlua:", 7) == 0) {
         consumer->type = CONSUMER_TYPE_DYNLUA;
         strncpy(consumer->procedure_name, method + 7,
+                sizeof(consumer->procedure_name));
+    } else if (strncmp(method, "rep:", 4) == 0) {
+        consumer->type = CONSUMER_TYPE_REP;
+        strncpy(consumer->procedure_name, method + 4,
+                sizeof(consumer->procedure_name));
+    } else if (strncmp(method, "rep:", 4) == 0) {
+        consumer->type = CONSUMER_TYPE_REP;
+        strncpy(consumer->procedure_name, method + 4,
                 sizeof(consumer->procedure_name));
     } else if (strncmp(method, "fstsnd:", 7) == 0) {
         char buf[128];
@@ -1349,14 +1358,14 @@ static int check_consumer_destination(struct consumer *consumer)
 
 static void stop_consumer(struct consumer *consumer)
 {
-    // These get offloaded to replicants, not run locally.
+    // These run on replicants, not run locally.
     // Let them get error from missing queue
     if (consumer->type == CONSUMER_TYPE_DYNLUA ||
-        consumer->type == CONSUMER_TYPE_LUA) {
+        consumer->type == CONSUMER_TYPE_LUA ||
+        consumer->type == CONSUMER_TYPE_REP) {
         return;
     }
 
-    // TODO CONSUMER_TYPE_LUA,
     pthread_mutex_lock(&consumer->mutex);
     consumer->please_stop = 1;
     pthread_cond_signal(&consumer->cond);

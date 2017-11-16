@@ -363,7 +363,6 @@ int osql_serial_send_readset(struct sqlclntstate *clnt, int nettype)
  */
 int osql_block_commit(struct sql_thread *thd)
 {
-
     return osql_send_commit_logic(thd->sqlclntstate, 0, NET_OSQL_BLOCK_RPL);
 }
 

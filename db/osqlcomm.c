@@ -6610,7 +6610,10 @@ int osql_process_packet(struct ireq *iq, unsigned long long rqid, uuid_t uuid,
         } else {
             osql_set_delayed(iq);
         }
-
+        if (dt.seq) { //insertgenid
+            genid = flibc_htonll(dt.seq);
+            addflags |= RECFLAGS_KEEP_GENID;
+        }
         rc = add_record(iq, trans, tag_name_ondisk,
                         tag_name_ondisk + tag_name_ondisk_len, /*tag*/
                         pData, pData + dt.nData,               /*dta*/

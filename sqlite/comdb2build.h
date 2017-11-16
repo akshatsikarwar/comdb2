@@ -127,4 +127,6 @@ void comdb2getkw(Parse* pParse, int reserved);
     out[in->n] = '\0';                                                         \
     sqlite3Dequote(out)
 
+int comdb2SendBpfunc(OpFunc*);
+
 #endif // COMDB2BUILD_H

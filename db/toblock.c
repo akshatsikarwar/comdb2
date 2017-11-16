@@ -75,6 +75,7 @@
 #include "bpfunc.h"
 #include "debug_switches.h"
 #include "logmsg.h"
+#include "bdb_int.h"
 
 #if 0
 #define TEST_OSQL
@@ -2095,10 +2096,7 @@ osql_create_transaction(struct javasp_trans_state *javasp_trans_handle,
                   *trans, iq->usedb->dbnum, iq->usedb->tablename);
     }
 
-    if (parent_trans)
-        javasp_trans_set_trans(javasp_trans_handle, iq, *parent_trans, *trans);
-    else
-        javasp_trans_set_trans(javasp_trans_handle, iq, NULL, *trans);
+    javasp_trans_set_trans(javasp_trans_handle, iq, *trans);
 
     *osql_needtransaction = OSQL_BPLOG_RECREATEDTRANS;
 
@@ -2156,7 +2154,7 @@ static int toblock_outer(struct ireq *iq, block_state_t *blkstate)
 
     my_tid = pthread_self();
 
-    iq->jsph = javasp_trans_start(iq->debug);
+    iq->jsph = javasp_trans_start();
     iq->blkstate = blkstate;
 
     /* paranoia - make sure this thing starts out initialized unless we
@@ -2771,7 +2769,7 @@ static int toblock_main_int(struct javasp_trans_state *javasp_trans_handle,
                   iq->usedb->tablename);
     }
 
-    javasp_trans_set_trans(javasp_trans_handle, iq, parent_trans, trans);
+    javasp_trans_set_trans(javasp_trans_handle, iq, trans);
 
     if (gbl_replicate_local && get_dbtable_by_name("comdb2_oplog")) {
         /* Transactionally read the last sequence number.
@@ -4833,13 +4831,24 @@ static int toblock_main_int(struct javasp_trans_state *javasp_trans_handle,
         }
     }
 
+    int pull_trigger(void *trans);
+    pull_trigger(trans);
+
+    /*
+    char parm[2] = {0};
+    parm[0] = 'o';
+    int __lock_dump_region(void *, const char *area, FILE *fp);
+    bdb_state_type *bdb_state = thedb->bdb_env;
+    __lock_dump_region(bdb_state->dbenv , parm, stderr);
+    */
+
     /* no errors yet - clean up blob buffers */
     free_blob_buffers(blobs, MAXBLOBS);
 
     /* From this point onwards Java triggers should not be allowed to write
      * the db using our transaction.  However we still need iq to be valid
      * so that javasp_reqprint() can be called successfully. */
-    javasp_trans_set_trans(javasp_trans_handle, iq, trans, NULL);
+    javasp_trans_set_trans(javasp_trans_handle, iq, NULL);
 
     /* COMMIT CHILD TRANSACTION */
     thrman_wheref(thr_self, "%s [child commit]", req2a(iq->opcode));

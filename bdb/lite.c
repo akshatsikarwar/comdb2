@@ -251,11 +251,11 @@ int bdb_lite_exact_var_fetch_tran(bdb_state_type *bdb_state, tran_type *tran,
     return rc;
 }
 
-int bdb_lite_fetch_partial(bdb_state_type *bdb_state, void *key_in, int klen_in,
-                           void *key_out, int *fnd, int *bdberr)
+int bdb_lite_fetch_partial_tran(bdb_state_type *bdb_state, tran_type *tran,
+                                void *key_in, int klen_in, void *key_out,
+                                int *fnd, int *bdberr)
 {
     DBT dbt_key = {0}, dbt_data = {0};
-    DB *db;
     DBC *dbcp = NULL;
     int rc;
     int ixlen = bdb_state->ixlen[0];
@@ -268,8 +268,9 @@ int bdb_lite_fetch_partial(bdb_state_type *bdb_state, void *key_in, int klen_in,
     dbt_key.ulen = ixlen;
     dbt_data.flags = DB_DBT_PARTIAL;
 
-    db = bdb_state->dbp_data[0][0];
-    rc = db->cursor(db, NULL, &dbcp, 0);
+    DB_TXN *tid = tran ? tran->tid : NULL;
+    DB *db = bdb_state->dbp_data[0][0];
+    rc = db->cursor(db, tid, &dbcp, 0);
     if (rc != 0) {
         bdb_cursor_error(bdb_state, NULL, rc, bdberr, __func__);
         return -1;
@@ -312,6 +313,13 @@ done:
         }
     }
     return rc;
+}
+
+int bdb_lite_fetch_partial(bdb_state_type *bdb_state, void *key_in, int klen_in,
+                           void *key_out, int *fnd, int *bdberr)
+{
+    return bdb_lite_fetch_partial_tran(bdb_state, NULL, key_in, klen_in,
+                                       key_out, fnd, bdberr);
 }
 
 /* Fetch 1 or more keys from the database. */

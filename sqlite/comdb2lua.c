@@ -16,6 +16,10 @@
 #include <comdb2vdbe.h>
 #include <trigger.h>
 #include <sqlglue.h>
+#include <sql.h>
+#include <bpfunc.h>
+#include <bpfunc.pb-c.h>
+#include <comdb2build.h>
 
 struct dbtable;
 struct dbtable *getqueuebyname(const char *);
@@ -74,10 +78,8 @@ static void add_watched_cols(int type, Table *table, Cdb2TrigEvent *event,
         }
 #ifdef ALLOW_ALL_COLS
     } else {
-        for (int i = 0; i < table->nCol; ++i) {
-            ColumnEvent *ce = getcol(list, table->aCol[i].zName);
-            ce->event |= type;
-        }
+        ColumnEvent *ce = getcol(list, "*");
+        ce->event |= type;
 #endif
     }
 }
@@ -155,7 +157,7 @@ Cdb2TrigTables *comdb2AddTriggerTable(Parse *parse, Cdb2TrigTables *tables,
     return tmp;
 }
 
-// dynamic -> consumer
+// if dynamic -> consumer otherwise trigger
 void comdb2CreateTrigger(Parse *parse, int dynamic, Token *proc,
                          Cdb2TrigTables *tbl)
 {
@@ -300,4 +302,84 @@ void comdb2DropScalarFunc(Parse *parse, Token *proc)
 void comdb2DropAggFunc(Parse *parse, Token *proc)
 {
     comdb2DropFunc(parse, proc, a, aggregate);
+}
+
+void comdb2CreateReplicant(Parse *parse, Token *proc)
+{
+    TokenStr(spname, proc);
+    Q4SP(qname, spname);
+
+    struct schema_change_type *sc = new_schemachange_type();
+    sc->is_trigger = 1;
+    sc->addonly = 1;
+    strcpy(sc->table, qname);
+
+    char method[64];
+    sprintf(method, "dest:rep:%s", spname);
+
+    struct dest *d = malloc(sizeof(struct dest));
+    d->dest = strdup(method);
+    listc_abl(&sc->dests, d);
+    Vdbe *v = sqlite3GetVdbe(parse);
+    comdb2prepareNoRows(v, parse, 0, sc, &comdb2SqlSchemaChange_tran,
+                        (vdbeFuncArgFree)&free_schema_change_type);
+}
+
+static int replicantGetNextSeq(OpFunc *f)
+{
+    int rc;
+    uint64_t seq = UINT64_MAX;
+    char *qname = f->arg;
+    if ((rc = get_next_seq(qname, &seq)) == 0) {
+        if (seq <= INT64_MAX) {
+            opFuncWriteInteger(f, seq);
+            f->rc = SQLITE_OK;
+            f->errorMsg = NULL;
+            return SQLITE_OK;
+        }
+    }
+    struct sql_thread *thd = pthread_getspecific(query_info_key);
+    osqlstate_t *osql = &thd->sqlclntstate->osql;
+    char *err = osql->xerr.errstr;
+    size_t sz = sizeof(osql->xerr.errstr);
+    snprintf(err, sz, "no such queue:%s", qname);
+    f->errorMsg = err;
+    f->rc = SQLITE_INTERNAL;
+    return SQLITE_OK;
+}
+
+void comdb2ReplicantGetNextSeq(Parse *pParse, Token *proc)
+{
+    Vdbe *v = sqlite3GetVdbe(pParse);
+    const char *colname[] = {"next_event"};
+    const int coltype = OPFUNC_INT_TYPE;
+    OpFuncSetup stp = {1, colname, &coltype, 256};
+    TokenStr(spname, proc);
+    Q4SP(qname, spname);
+    comdb2prepareOpFunc(v, pParse, 0, strdup(qname), &replicantGetNextSeq,
+                        (vdbeFuncArgFree)&free, &stp);
+}
+
+void comdb2ReplicantPutNextSeq(Parse *pParse, Token *proc, Token *seqtok)
+{
+    Vdbe *v = sqlite3GetVdbe(pParse);
+    v->readOnly = 0;
+    TokenStr(spname, proc);
+    Q4SP(qname, spname);
+    TokenStr(seqstr, seqtok);
+    i64 seq = strtoll(seqstr, NULL, 10);
+
+    BpfuncReplicantSeq *bpseq = malloc(sizeof(BpfuncReplicantSeq));
+    bpfunc_replicant_seq__init(bpseq);
+    bpseq->qname = strdup(qname);
+    bpseq->seq = seq;
+
+    BpfuncArg *arg = malloc(sizeof(BpfuncArg));
+    bpfunc_arg__init(arg);
+    arg->rep_seq = bpseq;
+    arg->type = BPFUNC_REPLICANT_SEQ;
+
+    comdb2prepareNoRows(v, pParse, 0, arg, &comdb2SendBpfunc,
+                        (vdbeFuncArgFree)&free_bpfunc_arg);
+    return;
 }

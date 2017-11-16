@@ -11,10 +11,10 @@ int initOpFuncDefault(OpFunc* o);
 void freeOpFunc(OpFunc* o);
 int moreRecords(OpFunc* opf);
 char* nextString(OpFunc* opf, Mem* mem);
-int nextInteger(OpFunc* opf);
+i64 nextInteger(OpFunc* opf);
 double nextReal(OpFunc* opf);
 int opFuncPrintf(OpFunc* arg, char* format, ...);
-int opFuncWriteInteger(OpFunc* opf, int val);
+int opFuncWriteInteger(OpFunc* opf, i64 val);
 int opFuncWriteReal(OpFunc* opf, double val);
 int comdb2VdbeAddExecFunc(Vdbe *p, Parse *pParse, void* arg, 
     vdbeFunc func, vdbeFuncArgFree dest);

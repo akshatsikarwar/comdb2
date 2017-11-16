@@ -130,6 +130,7 @@ typedef struct {
     pthread_mutex_t *lock;
     pthread_cond_t *cond;
     const uint8_t *open;
+    enum consumer_t type;
     trigger_reg_t info; // must be last in struct
 } dbconsumer_t;
 
@@ -149,13 +150,15 @@ static void reset_sp(SP);
     (sizeof(dbconsumer_t) - sizeof(trigger_reg_t) + trigger_reg_sz(spname))
 
 static int setup_dbconsumer(dbconsumer_t *q, struct consumer *consumer,
-                            struct dbtable *qdb, trigger_reg_t *info)
+                            struct dbtable *qdb, trigger_reg_t *info,
+                            enum consumer_t type)
 {
     init_fake_ireq(thedb, &q->iq);
     int spname_len = htonl(info->spname_len);
     q->iq.usedb = qdb;
     q->consumer = consumer;
     q->info = *info;
+    q->type = type;
     strcpy(q->info.spname, info->spname);
     strcpy(q->info.spname + spname_len + 1, info->spname + spname_len + 1);
     return bdb_trigger_subscribe(qdb->handle, &q->cond, &q->lock, &q->open);
@@ -1748,6 +1751,54 @@ static char *load_default_src(char *spname, struct spversion_t *spversion,
     return src;
 }
 
+const char default_replicant_src[] =
+"local function drain()\n"
+"    local q = db:consumer()\n"
+"    local event\n"
+"    while true do\n"
+"        local e = q:poll(1000)\n"
+"        if e == nil then\n"
+"            break\n"
+"        else\n"
+"            event = e\n"
+"            q:consume()\n"
+"        end\n"
+"    end\n"
+"    if event == nil then\n"
+"        return -200, 'no events in queue'\n"
+"    end\n"
+"    db:num_columns(1)\n"
+"    db:column_name([[last_id]], 1)\n"
+"    db:column_type([[int]], 1)\n"
+"    event = db:json_to_table(event)\n"
+"    db:emit(event.id)\n"
+"    return 0\n"
+"end\n"
+"local function main(do_drain)\n"
+"    if do_drain then\n"
+"        return drain()\n"
+"    end\n"
+"    db:num_columns(1)\n"
+"    db:column_name([[event]], 1)\n"
+"    db:column_type([[text]], 1)\n"
+"    local q = db:consumer()\n"
+"    while true do\n"
+"        local event = q:get()\n"
+"        q:emit(event)\n"
+"        q:consume()\n"
+"    end\n"
+"end";
+
+static int default_replicant(char *spname)
+{
+    Q4SP(qname, spname);
+    struct dbtable *qdb = getqueuebyname(qname);
+    if (qdb == NULL || qdb->consumers == NULL ||
+        consumer_type(qdb->consumers[0]) != CONSUMER_TYPE_REP)
+        return 0;
+    return 1;
+}
+
 static char *load_src(char *spname, struct spversion_t *spversion,
                       int bootstrap, char **err)
 {
@@ -1770,7 +1821,10 @@ static char *load_src(char *spname, struct spversion_t *spversion,
             return strdup(src);
         }
     }
-    if (spversion->version_num == 0 && spversion->version_str == NULL) {
+    if (default_replicant(spname)) {
+        src = strdup(default_replicant_src);
+        size = sizeof(default_replicant_src) - 1;
+    } else if (spversion->version_num == 0 && spversion->version_str == NULL) {
         if ((src = load_default_src(spname, spversion, &size)) == NULL) {
             *err = no_such_procedure(spname, spversion);
             return NULL;
@@ -4183,13 +4237,16 @@ static int db_consumer(Lua L)
 
     enum consumer_t type = consumer_type(consumer);
     trigger_reg_t *t;
-    if (type == CONSUMER_TYPE_DYNLUA) {
+    switch (type) {
+    case CONSUMER_TYPE_REP:
+    case CONSUMER_TYPE_DYNLUA:
         // will block until registration completes
         trigger_reg_init(t, spname);
         int rc = luabb_trigger_register(L, t);
         if (rc != CDB2_TRIG_REQ_SUCCESS) return luaL_error(L, sp->error);
-    } else {
-        luabb_error(L, sp, "no such consumer");
+        break;
+    default:
+        luabb_error(L, sp, "so such consumer");
         lua_pushnil(L);
         return 1;
     }
@@ -4197,7 +4254,7 @@ static int db_consumer(Lua L)
     dbconsumer_t *q;
     size_t sz = dbconsumer_sz(spname);
     new_lua_t_sz(L, q, dbconsumer_t, DBTYPES_DBCONSUMER, sz);
-    if (setup_dbconsumer(q, consumer, db, t) != 0) {
+    if (setup_dbconsumer(q, consumer, db, t, type) != 0) {
         luabb_error(L, sp, "failed to register consumer with qdb");
         lua_pushnil(L);
         return 1;
@@ -6108,11 +6165,20 @@ static uint8_t *consume_field(Lua L, uint8_t *payload)
     return payload;
 }
 
+static int push_replicant_arg(Lua L, uint8_t *payload, size_t len)
+{
+    lua_pushlstring(L, payload, len);
+    return 1;
+}
+
 static int push_trigger_args_int(Lua L, dbconsumer_t *q, struct qfound *f, char **err)
 {
     uint8_t *payload = ((uint8_t *)f->item) + f->dtaoff;
     size_t len = f->len - f->dtaoff;
     q->genid = f->item->genid;
+    if (q->type == CONSUMER_TYPE_REP) {
+        return push_replicant_arg(L, payload, len);
+    }
     /*
     char header[] = "CDB2_UPD";
     if (memcmp(payload, header, sizeof(header)) != 0) {
@@ -6596,7 +6662,7 @@ static int setup_sp_for_trigger(trigger_reg_t *reg, char **err,
     size_t sz = dbconsumer_sz(spname);
     dbconsumer_t *newq = calloc(1, sz);
     init_new_t(newq, DBTYPES_DBCONSUMER);
-    if (setup_dbconsumer(newq, consumer, db, reg) != 0) {
+    if (setup_dbconsumer(newq, consumer, db, reg, consumer_type(consumer)) != 0) {
         *err = strdup("failed to register trigger with qdb");
         return -1;
     }

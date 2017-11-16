@@ -2063,4 +2063,22 @@ void add_dttz_intvds(const dttz_t *, const intv_t *, dttz_t *);
 void sub_dttz_intvds(const dttz_t *, const intv_t *, dttz_t *);
 void sub_dttz_dttz(const dttz_t *, const dttz_t *, intv_t *);
 
+int SERVER_INTVYM_to_CLIENT_CSTR(const void *in, int inlen,
+                                 const struct field_conv_opts *inopts,
+                                 blob_buffer_t *inblob, void *out, int outlen,
+                                 int *outnull, int *outdtsz,
+                                 const struct field_conv_opts *outopts,
+                                 blob_buffer_t *outblob);
+int SERVER_INTVDS_to_CLIENT_CSTR(const void *in, int inlen,
+                                 const struct field_conv_opts *inopts,
+                                 blob_buffer_t *inblob, void *out, int outlen,
+                                 int *outnull, int *outdtsz,
+                                 const struct field_conv_opts *outopts,
+                                 blob_buffer_t *outblob);
+int SERVER_INTVDSUS_to_CLIENT_CSTR(const void *in, int inlen,
+                                   const struct field_conv_opts *inopts,
+                                   blob_buffer_t *inblob, void *out, int outlen,
+                                   int *outnull, int *outdtsz,
+                                   const struct field_conv_opts *outopts,
+                                   blob_buffer_t *outblob);
 #endif

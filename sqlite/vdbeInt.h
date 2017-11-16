@@ -523,6 +523,7 @@ struct Vdbe {
   int explainTraceAlloced;
   int dtprec;             /* datetime precision - make it u32 to silence compiler */
   struct timespec tspec;  /* time of prepare, used for stable now() */
+  uint64_t have_real_genid;
 };
 
 /*

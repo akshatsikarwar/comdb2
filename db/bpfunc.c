@@ -26,6 +26,7 @@ static int exec_analyze_coverage(void *tran, bpfunc_t *func, char *err);
 static int exec_rowlocks_enable(void *tran, bpfunc_t *func, char *err);
 static int exec_genid48_enable(void *tran, bpfunc_t *func, char *err);
 static int exec_set_skipscan(void *tran, bpfunc_t *func, char *err);
+static int exec_replicant_seq(void *tran, bpfunc_t *, char *err);
 /********************      UTILITIES     ***********************/
 
 static int empty(void *tran, bpfunc_t *func, char *err) { return 0; }
@@ -103,6 +104,10 @@ static int prepare_methods(bpfunc_t *func, bpfunc_info *info)
 
     case BPFUNC_SET_SKIPSCAN:
         func->exec = exec_set_skipscan;
+        break;
+
+    case BPFUNC_REPLICANT_SEQ:
+        func->exec = exec_replicant_seq;
         break;
 
     default:
@@ -500,3 +505,8 @@ static int exec_rowlocks_enable(void *tran, bpfunc_t *func, char *err)
     return rc;
 }
 
+static int exec_replicant_seq(void *tran, bpfunc_t *func, char *err)
+{
+    BpfuncReplicantSeq *x = func->arg->rep_seq;
+    return bdb_set_trigger_seq(tran, x->qname, x->seq);
+}

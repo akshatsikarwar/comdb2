@@ -157,7 +157,8 @@ typedef enum {
     LLMETA_DEFAULT_VERSIONED_SP = 43,
     LLMETA_TABLE_USER_SCHEMA = 44,
     LLMETA_USER_PASSWORD_HASH = 45,
-    LLMETA_FVER_FILE_TYPE_QDB = 46 /* file version for a dbqueue */
+    LLMETA_FVER_FILE_TYPE_QDB = 46,
+    LLMETA_TRIGGER_SEQ = 47
 } llmetakey_t;
 
 struct llmeta_file_type_key {
@@ -8039,16 +8040,16 @@ done:
 */
 
 // get values for all matching keys
-static int kv_get(void *k, size_t klen, void ***ret, int *num, int *bdberr)
+static inline int kv_get_tran(tran_type *tran, void *k, size_t klen,
+                              void ***ret, int *num, int *bdberr)
 {
-    int fnd;
+    int rc, fnd;
     int n = 0;
     int inc = 10;
     int alloc = 0;
     uint8_t out[LLMETA_IXLEN];
     void **vals = NULL;
-    int rc =
-        bdb_lite_fetch_partial(llmeta_bdb_state, k, klen, out, &fnd, bdberr);
+    rc = bdb_lite_fetch_partial_tran(llmeta_bdb_state, tran, k, klen, out, &fnd, bdberr);
     while (rc == 0 && fnd == 1) {
         if (memcmp(k, out, klen) != 0) {
             break;
@@ -8056,7 +8057,7 @@ static int kv_get(void *k, size_t klen, void ***ret, int *num, int *bdberr)
         void *dta;
         int dsz;
         rc =
-            bdb_lite_exact_var_fetch(llmeta_bdb_state, out, &dta, &dsz, bdberr);
+            bdb_lite_exact_var_fetch_tran(llmeta_bdb_state, tran, out, &dta, &dsz, bdberr);
         if (rc || *bdberr != BDBERR_NOERROR) {
             break;
         }
@@ -8066,13 +8067,18 @@ static int kv_get(void *k, size_t klen, void ***ret, int *num, int *bdberr)
         }
         vals[n++] = dta;
         uint8_t nxt[LLMETA_IXLEN];
-        rc = bdb_lite_fetch_keys_fwd(llmeta_bdb_state, out, nxt, 1, &fnd,
+        rc = bdb_lite_fetch_keys_fwd_tran(llmeta_bdb_state, tran, out, nxt, 1, &fnd,
                                      bdberr);
         memcpy(out, nxt, sizeof(out));
     }
     *num = n;
     *ret = vals;
     return rc;
+}
+
+static inline int kv_get(void *k, size_t klen, void ***ret, int *num, int *bdberr)
+{
+    return kv_get_tran(NULL, k, klen, ret, num, bdberr);
 }
 
 // get full keys for all matching partial keys
@@ -8754,5 +8760,43 @@ int bdb_rename_table_metadata(bdb_state_type *bdb_state, tran_type *tran,
     if (rc)
         return rc;
 
+    return rc;
+}
+
+typedef struct {
+    int32_t llkey; // LLMETA_TRIGGER_SEQ
+    char name[LLMETA_SPLEN];
+} trigger_seq_t;
+int bdb_set_trigger_seq(tran_type *tran, const char *name, uint64_t val)
+{
+    union {
+        trigger_seq_t seq;
+        uint8_t buf[LLMETA_IXLEN];
+    } k = {0};
+    k.seq.llkey = htonl(LLMETA_TRIGGER_SEQ);
+    strcpy(k.seq.name, name);
+    int bdberr;
+    val = flibc_htonll(val);
+    return kv_put(tran, &k, &val, sizeof(val), &bdberr);
+}
+int bdb_get_trigger_seq(tran_type *tran, const char *name, uint64_t *val)
+{
+    union {
+        trigger_seq_t seq;
+        uint8_t buf[LLMETA_IXLEN];
+    } k = {0};
+    k.seq.llkey = htonl(LLMETA_TRIGGER_SEQ);
+    strcpy(k.seq.name, name);
+    uint64_t **vals = NULL;
+    int n;
+    int bdberr = 0;
+    int rc = kv_get_tran(tran, &k, sizeof(k), (void ***)&vals, &n, &bdberr);
+    if (rc == 0 && bdberr == 0 && n == 1) {
+        *val = flibc_ntohll(*(uint64_t*)vals[0]);
+        free(vals[0]);
+    } else {
+        rc = 1;
+    }
+    free(vals);
     return rc;
 }

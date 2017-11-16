@@ -117,13 +117,13 @@ int tocustom(struct ireq *iq);
 
 /* Call this to begin a new transaction.  It initializes any state needed by
  * the Java SP engine to listen to transaction events. */
-struct javasp_trans_state *javasp_trans_start(int debug);
+struct javasp_trans_state *javasp_trans_start();
 struct javasp_trans_state *javasp_consumer_trans_start(int debug);
 
 /* Set the ireq and transaction for the Java handle.  Must be called before
  * any Java triggers are invoked. */
 void javasp_trans_set_trans(struct javasp_trans_state *javasp_trans_handle,
-                            struct ireq *ireq, void *parent_trans, void *trans);
+                            struct ireq *ireq, void *trans);
 
 /* Call this at the end of a transaction (committed or aborted).  Cleans up. */
 void javasp_trans_end(struct javasp_trans_state *javasp_trans_handle);
@@ -211,4 +211,6 @@ typedef struct {
     LISTC_T(trigger_tbl_info) tbls;
 } trigger_info;
 void get_trigger_info(const char *, trigger_info *);
+int pull_trigger_sc(void *trans, struct javasp_trans_state *, const char *type,
+                    const char *tbl, const char *payload);
 #endif

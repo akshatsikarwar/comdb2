@@ -3750,7 +3750,7 @@ void sqlite3DeleteTable(sqlite3*, Table*);
 # define sqlite3AutoincrementBegin(X)
 # define sqlite3AutoincrementEnd(X)
 #endif
-void sqlite3Insert(Parse*, SrcList*, Select*, IdList*, int);
+void sqlite3Insert(Parse*, SrcList*, Select*, IdList*, int, Token*);
 void *sqlite3ArrayAllocate(sqlite3*,void*,int,int*,int*);
 IdList *sqlite3IdListAppend(sqlite3*, IdList*, Token*);
 int sqlite3IdListIndex(IdList*,const char*);
@@ -4486,10 +4486,13 @@ void comdb2DropTrigger(Parse*,Token*);
 Cdb2TrigTables *comdb2AddTriggerTable(Parse*,Cdb2TrigTables*,SrcList*,Cdb2TrigEvents*);
 void comdb2CreateTrigger(Parse*,int dynamic,Token*,Cdb2TrigTables*);
 
-void comdb2CreateScalarFunc(Parse *, Token *);
-void comdb2DropScalarFunc(Parse *, Token *);
-void comdb2CreateAggFunc(Parse *, Token *);
-void comdb2DropAggFunc(Parse *, Token *);
+void comdb2CreateScalarFunc(Parse*, Token*);
+void comdb2DropScalarFunc(Parse*, Token*);
+void comdb2CreateAggFunc(Parse*, Token*);
+void comdb2DropAggFunc(Parse*, Token*);
+void comdb2CreateReplicant(Parse*, Token*);
+void comdb2ReplicantGetNextSeq(Parse*, Token*);
+void comdb2ReplicantPutNextSeq(Parse*, Token*, Token*);
 
 int sqlite3ExprVectorSize(Expr *pExpr);
 int sqlite3ExprIsVector(Expr *pExpr);

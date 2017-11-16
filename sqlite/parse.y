@@ -245,13 +245,74 @@ columnname(A) ::= nm(A) typetoken(Y). {comdb2AddColumn(pParse,&A,&Y);}
 //
 // COMDB2 KEYWORDS  
 //
-  ADD AGGREGATE ALIAS AUTHENTICATION BLOBFIELD BULKIMPORT CHECK CONSTRAINT
-  COMMITSLEEP CONSUMER CONVERTSLEEP COVERAGE CRLE DATA DATABLOB DATACOPY DBPAD
-  DEFERRABLE DISABLE DRYRUN ENABLE FOR FOREIGN FUNCTION GENID48 GET GRANT
-  IPU ISC KW LUA LZ4 NONE ODH OFF OP OPTIONS PARTITION PASSWORD PERIOD
-  PROCEDURE PUT REBUILD READ REC REFERENCES RESERVED RETENTION REVOKE RLE
-  ROWLOCKS SCALAR SCHEMACHANGE SKIPSCAN START SUMMARIZE THREADS THRESHOLD TIME
-  TRUNCATE TUNABLE VERSION WRITE DDL USERSCHEMA ZLIB .
+ADD
+AGGREGATE
+ALIAS
+AUTHENTICATION
+BLOBFIELD
+BULKIMPORT
+CHECK
+COMMITSLEEP
+CONSTRAINT
+CONSUMER
+CONVERTSLEEP
+COVERAGE
+CRLE
+DATA
+DATABLOB
+DATACOPY
+DBPAD
+DDL
+DEFERRABLE
+DISABLE
+DRYRUN
+ENABLE
+FOR
+FOREIGN
+FUNCTION
+GENID48
+GET
+GRANT
+IPU
+ISC
+KW
+LUA
+LZ4
+NONE
+ODH
+OFF
+OP
+OPTIONS
+PARTITION
+PASSWORD
+PERIOD
+PROCEDURE
+PUT
+READ
+REBUILD
+REC
+REFERENCES
+REPLICANT
+RESERVED
+RETENTION
+REVOKE
+RLE
+ROWLOCKS
+SCALAR
+SCHEMACHANGE
+SKIPSCAN
+START
+SUMMARIZE
+THREADS
+THRESHOLD
+TIME
+TRUNCATE
+TUNABLE
+USERSCHEMA
+VERSION
+WRITE
+ZLIB
+.
 %wildcard ANY.
 
 
@@ -872,13 +933,13 @@ setlist(A) ::= LP idlist(X) RP EQ expr(Y). {
 cmd ::= with(W) insert_cmd(R) INTO fullname(X) idlist_opt(F) select(S). {
   sqlite3WithPush(pParse, W, 1);
   sqlite3FingerprintInsert(pParse->db, X, S, F, W);
-  sqlite3Insert(pParse, X, S, F, R);
+  sqlite3Insert(pParse, X, S, F, R, 0); /* COMDB2 MODIFICATION */
 }
 cmd ::= with(W) insert_cmd(R) INTO fullname(X) idlist_opt(F) DEFAULT VALUES.
 {
   sqlite3WithPush(pParse, W, 1);
   sqlite3FingerprintInsert(pParse->db, X, NULL, F, W);
-  sqlite3Insert(pParse, X, NULL, F, R);
+  sqlite3Insert(pParse, X, NULL, F, R, 0); /* COMDB2 MODIFICATION */
 }
 
 %type insert_cmd {int}
@@ -898,6 +959,16 @@ idlist(A) ::= idlist(A) COMMA nm(Y).
     {A = sqlite3IdListAppend(pParse->db,A,&Y);}
 idlist(A) ::= nm(Y).
     {A = sqlite3IdListAppend(pParse->db,0,&Y); /*A-overwrites-Y*/}
+
+/* COMDB2 MODIFICATION */
+cmd ::= INSERTGENID BLOB(I) INTO fullname(X) idlist_opt(F) rowvalues(S). {
+  sqlite3Insert(pParse, X, S, F, 0, &I);
+}
+%type rowvalues {Select*}
+%destructor rowvalues {sqlite3SelectDelete(pParse->db, $$);}
+rowvalues(A) ::= VALUES LP nexprlist(X) RP. {
+  A = sqlite3SelectNew(pParse,X,0,0,0,0,0,SF_Values,0,0);
+}
 
 /////////////////////////// Expression Processing /////////////////////////////
 //
@@ -1700,6 +1771,10 @@ getcmd ::= ANALYZE THRESHOLD nm(Y) dbnm(Z). {
     comdb2getAnalyzeThreshold(pParse,&Y,&Z);
 }
 
+getcmd ::= LUA REPLICANT nm(Q). {
+    comdb2ReplicantGetNextSeq(pParse, &Q);
+}
+
 ///////////////////// COMDB2 PUT statements //////////////////////////////////
 
 cmd ::= PUT putcmd. {
@@ -1796,6 +1871,10 @@ putcmd ::= SCHEMACHANGE CONVERTSLEEP INTEGER(F). {
 
 putcmd ::= TUNABLE nm(N) INTEGER|FLOAT|STRING(M). {
     comdb2putTunable(pParse, &N, &M);
+}
+
+putcmd ::= LUA REPLICANT nm(Q) INTEGER(I). {
+    comdb2ReplicantPutNextSeq(pParse, &Q, &I);
 }
 
 ///////////////////// COMDB2 REBUILD STATEMENTS //////////////////////////////
@@ -2007,6 +2086,10 @@ cmd ::= createkw LUA AGGREGATE FUNCTION nm(Q). {
 	comdb2CreateAggFunc(pParse, &Q);
 }
 
+cmd ::= createkw LUA REPLICANT nm(Q). {
+  comdb2CreateReplicant(pParse,&Q);
+}
+
 cmd ::= createkw LUA TRIGGER nm(Q) ON table_trigger_event(T). {
   comdb2CreateTrigger(pParse,0,&Q,T);
 }
@@ -2074,6 +2157,9 @@ cmd ::= DROP LUA TRIGGER nm(A). {
   comdb2DropTrigger(pParse,&A);
 }
 cmd ::= DROP LUA CONSUMER nm(A). {
+  comdb2DropTrigger(pParse,&A);
+}
+cmd ::= DROP LUA REPLICANT nm(A). {
   comdb2DropTrigger(pParse,&A);
 }
 

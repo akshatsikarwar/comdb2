@@ -9,6 +9,7 @@ enum consumer_t {
     CONSUMER_TYPE_JAVASP = 2,
     CONSUMER_TYPE_LUA,
     CONSUMER_TYPE_DYNLUA,
+    CONSUMER_TYPE_REP, // lua replicant
 };
 
 enum {
@@ -68,3 +69,5 @@ void trigger_reg_to_cpu(trigger_reg_t *);
     char var[sizeof("__q") + strlen(spname)];                                  \
     sprintf(var, "__q%s", spname);
 #endif
+
+int get_next_seq(const char *qname, uint64_t *seq);

@@ -389,6 +389,7 @@ static int perform_trigger_update_int(struct schema_change_type *sc)
      * other methods, we need to manage the existing consumer first. */
     if (sc->addonly) {
         /* create a procedure (needs to go away, badly) */
+        if (config == NULL) config = "";
         rc = javasp_do_procedure_op(JAVASP_OP_LOAD, sc->table, NULL, config);
         if (rc) {
             logmsg(LOGMSG_ERROR, "%s: javasp_do_procedure_op returned rc %d\n",
@@ -398,7 +399,6 @@ static int perform_trigger_update_int(struct schema_change_type *sc)
             sbuf2printf(sb, "FAILED\n");
             goto done;
         }
-
         rc = bdb_llmeta_add_queue(thedb->bdb_env, tran, sc->table, config,
                                   sc->dests.count, dests, &bdberr);
         if (rc) {
@@ -407,6 +407,7 @@ static int perform_trigger_update_int(struct schema_change_type *sc)
             goto done;
         }
 
+        bdb_set_trigger_seq(tran, sc->table, 0);
         scdone_type = llmeta_queue_add;
 
         db = newqdb(thedb, sc->table, 65536 /* TODO: pass from comdb2sc? */,

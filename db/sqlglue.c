@@ -8159,8 +8159,6 @@ int sqlite3BtreeInsert(
 
     } else { /* real insert */
 
-        int is_update = 0;
-
         /* check authentication */
         if (authenticate_cursor(pCur, AUTHENTICATE_WRITE) != 0) {
             rc = SQLITE_ACCESS;
@@ -8255,7 +8253,11 @@ int sqlite3BtreeInsert(
 
         /* If it's a known invalid genid (see sqlite3BtreeNewRowid() for
          * rationale), don't bother actually looking for it. */
-        if (!is_genid_synthetic(nKey) &&
+        int is_update = 0;
+        if (pCur->vdbe->have_real_genid) {
+            pCur->genid = pCur->vdbe->have_real_genid;
+            pCur->vdbe->have_real_genid = 0;
+        } else if (!is_genid_synthetic(nKey) &&
             bdb_genid_is_recno(thedb->bdb_env, nKey))
             is_update = 0;
         else if (0 == pCur->genid)
@@ -12252,4 +12254,11 @@ uint16_t stmt_num_tbls(sqlite3_stmt *stmt)
 {
     Vdbe *v = (Vdbe *)stmt;
     return v->numTables;
+}
+
+void have_real_genid(Vdbe *v, const char *z)
+{
+    z += 2; // x'deadbeef' -> deadbeef'
+    genid_t id = strtoull(z, NULL, 16);
+    v->have_real_genid = id; //flibc_htonll(id);
 }

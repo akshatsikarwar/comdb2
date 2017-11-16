@@ -143,7 +143,7 @@ int moreRecords(OpFunc* opf)
 
 static inline int moreIntegerRecords(OpFunc* opf)
 {
-    return opf->readNext + sizeof(int) <= opf->writeNext;
+    return opf->readNext + sizeof(i64) <= opf->writeNext;
 }
 
 static inline int moreRealRecords(OpFunc* opf)
@@ -174,18 +174,18 @@ int opFuncPrintf(OpFunc* opf, char* format, ...)
     return used;
 }
 
-int opFuncWriteInteger(OpFunc* opf, int val)
+int opFuncWriteInteger(OpFunc* opf, i64 val)
 {
     if (opf->end == NULL || opf->writeNext == NULL)
         return 0;   
 
-    if (opf->writeNext + sizeof(int) >= opf->end &&  resize_buf(opf, sizeof(int)))
+    if (opf->writeNext + sizeof(val) >= opf->end &&  resize_buf(opf, sizeof(val)))
        return 0;
 
-    *((int*)opf->writeNext) = val;
-    opf->writeNext += sizeof(int);
+    *((i64*)opf->writeNext) = val;
+    opf->writeNext += sizeof(val);
 
-    return sizeof(int);
+    return sizeof(val);
 }
 
 int opFuncWriteReal(OpFunc* opf, double val)
@@ -229,13 +229,13 @@ char* nextString(OpFunc* opf, Mem *mem)
     return mem->z;
 }
 
-int nextInteger(OpFunc* opf)
+i64 nextInteger(OpFunc* opf)
 {
     
     if (moreIntegerRecords(opf))
     {
-        int rst = *((int*) opf->readNext); 
-        advanceNext(opf, sizeof(int));
+        i64 rst = *((i64*) opf->readNext);
+        advanceNext(opf, sizeof(i64));
         return rst;
     }
     return 0;

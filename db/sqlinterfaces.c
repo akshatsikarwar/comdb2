@@ -3561,14 +3561,9 @@ static int need_flush(struct sqlclntstate *clnt)
 static void get_return_row_schema(struct sqlthdstate *thd,
                                   struct sqlclntstate *clnt, sqlite3_stmt *stmt)
 {
-    int col;
-    int ncols;
-
-    ncols = sqlite3_column_count(stmt);
-
+    int ncols = sqlite3_column_count(stmt);
     thd->cinfo = realloc(thd->cinfo, ncols * sizeof(struct column_info));
-
-    for (col = 0; col < ncols; col++) {
+    for (int col = 0; col < ncols; col++) {
         if (clnt->req.parm) {
             thd->cinfo[col].type = clnt->type_overrides[col];
             if (!comdb2_is_valid_type(thd->cinfo[col].type)) {

@@ -42,13 +42,12 @@
 struct javasp_trans_state {
     /* Which events we are subscribed for. */
     int events;
+    int replicant;
 
     /* We need this in case the Java code tries to write anything in the
      * trans */
     struct ireq *iq;
     void *trans;
-    void *parent_trans;
-    int debug;
 };
 
 struct sp_rec_blob {
@@ -74,8 +73,8 @@ struct sp_table {
 struct stored_proc {
     char *name;
     char *param;
-
     char *qname;
+    int replicant;
     int flags;
     LISTC_T(struct sp_table) tables;
     LINKC_T(struct stored_proc) lnk;
@@ -193,21 +192,21 @@ void javasp_stat(const char *args)
     SP_RELLOCK();
 }
 
-struct javasp_trans_state *javasp_trans_start(int debug)
+struct javasp_trans_state *javasp_trans_start()
 {
     struct javasp_trans_state *st;
     struct stored_proc *sp;
 
-    st = malloc(sizeof(struct javasp_trans_state));
-    st->events = 0;
-    st->iq = NULL;
-    st->trans = NULL;
-    st->parent_trans = NULL;
-    st->debug = 0;
+    st = calloc(sizeof(struct javasp_trans_state), 1);
 
     SP_READLOCK();
 
-    LISTC_FOR_EACH(&stored_procs, sp, lnk) { st->events |= sp->flags; }
+    LISTC_FOR_EACH(&stored_procs, sp, lnk) {
+        if (sp->replicant)
+            st->replicant = 1;
+        else
+            st->events |= sp->flags;
+    }
 
     SP_RELLOCK();
 
@@ -215,11 +214,10 @@ struct javasp_trans_state *javasp_trans_start(int debug)
 }
 
 void javasp_trans_set_trans(struct javasp_trans_state *javasp_trans_handle,
-                            struct ireq *ireq, void *parent_trans, void *trans)
+                            struct ireq *ireq, void *trans)
 {
     javasp_trans_handle->iq = ireq;
     javasp_trans_handle->trans = trans;
-    javasp_trans_handle->parent_trans = parent_trans;
 }
 
 void javasp_trans_end(struct javasp_trans_state *javasp_trans_handle)
@@ -471,6 +469,48 @@ static int type_to_sptype(int type, int len)
     }
 }
 
+static char *type_to_spstr(int type, int len)
+{
+    switch (type) {
+    case SERVER_BINT:
+        switch (len) {
+        case 3: return "int16";
+        case 5: return "int32";
+        case 9: return "int64";
+        default: return NULL;
+        }
+    case SERVER_UINT:
+        switch (len) {
+        case 3: return "uint16";
+        case 5: return "uint32";
+        case 9: return "uint64";
+        default: return NULL;
+        }
+    case SERVER_BREAL:
+        switch (len) {
+        case 5: return "real32";
+        case 9: return "real64";
+        default: return NULL;
+        }
+    case SERVER_DECIMAL:
+        switch (len) {
+        case 5: return "decimal32";
+        case 9: return "decimal64";
+        case 17: return "decimal128";
+        }
+    case SERVER_BCSTR:
+    case SERVER_VUTF8: return "string";
+    case SERVER_BYTEARRAY: return "bytearray";
+    case SERVER_BLOB: return "blob";
+    case SERVER_DATETIME: return "datetime";
+    case SERVER_DATETIMEUS: return "datetimeus";
+    case SERVER_INTVYM: return "intervalym";
+    case SERVER_INTVDS: return "intervalds";
+    case SERVER_INTVDSUS: return "intervaldsus";
+    default: return NULL;
+    }
+}
+
 static void append_field(struct byte_buffer *bytes, struct field *f,
                          struct javasp_rec *record)
 {
@@ -589,13 +629,15 @@ static void append_field(struct byte_buffer *bytes, struct field *f,
         break;
 
     case SERVER_VUTF8:
+    case SERVER_BLOB2: {
         /* these are blobs internally, but go out as strings, ie, the type
            of this field is SP_FIELD_STRING */
+        int adj = f->type == SERVER_VUTF8;
         if (record->blobs[f->blob_index].bloblen) {
             byte_buffer_append_int32(bytes,
-                                     record->blobs[f->blob_index].bloblen - 1);
+                                     record->blobs[f->blob_index].bloblen - adj);
             byte_buffer_append(bytes, record->blobs[f->blob_index].blobdta,
-                               record->blobs[f->blob_index].bloblen - 1);
+                               record->blobs[f->blob_index].bloblen - adj);
         } else {
             int len;
             /* The field is not null or append_field would not be called.  It
@@ -610,6 +652,7 @@ static void append_field(struct byte_buffer *bytes, struct field *f,
         /* null-terminate */
         byte_buffer_append_zero(bytes, 1);
         break;
+    }
 
     case SERVER_BYTEARRAY:
         byte_buffer_append_int32(bytes, f->len - 1);
@@ -741,7 +784,381 @@ static void append_field(struct byte_buffer *bytes, struct field *f,
     }
 }
 
-/* This is the actual "stored procedure" call. */
+#include <cson_amalgamation_core.h>
+
+static char hexmap[] = {'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
+static cson_value *hex_encode_blob(uint8_t *b, int l)
+{
+    char *a, *m = NULL;
+    int len = l * 2 + 1;
+    if (l < 1024 * 2)
+        a = alloca(len);
+    else
+        a = m = malloc(len);
+    char *h = a;
+    for (int i = 0; i < l; ++i) {
+        *h = hexmap[(b[i] & 0xf0) >> 4]; ++h;
+        *h = hexmap[b[i] & 0x0f]; ++h;
+    }
+    *h = 0;
+    cson_value *v = cson_value_new_string(a, len);
+    if (m) free(m);
+    return v;
+}
+
+static void append_json_field(cson_object *col, const struct field *f,
+                              struct javasp_rec *record)
+{
+    long long i8;
+    int i4;
+    short i2;
+    unsigned long long u8;
+    unsigned int u4;
+    unsigned short u2;
+    double r8;
+    float r4;
+    int null, outsz, slen;
+
+    /* note: this routine doesn't get called for null values, so don't cover
+     * those here */
+
+    const void *rec = record->ondisk_dta;
+    cson_value *v;
+
+    switch (f->type) {
+    case SERVER_UINT:
+        switch (f->len) {
+        case 9:
+            SERVER_UINT_to_CLIENT_UINT((uint8_t *)rec + f->offset, f->len, NULL,
+                                       NULL, &u8, sizeof(u8), &null, &outsz,
+                                       NULL, NULL);
+            u8 = flibc_ntohll(u8);
+            // SQL doesn't support unsigned long long
+            v = u8 > INT64_MAX ? cson_value_null() : cson_value_new_integer(u8);
+            break;
+        case 5:
+            SERVER_UINT_to_CLIENT_UINT((uint8_t *)rec + f->offset, f->len, NULL,
+                                       NULL, &u4, sizeof(u4), &null, &outsz,
+                                       NULL, NULL);
+            u4 = ntohl(u4);
+            v = cson_value_new_integer(u4);
+            break;
+        case 3:
+            SERVER_UINT_to_CLIENT_UINT((uint8_t *)rec + f->offset, f->len, NULL,
+                                       NULL, &u2, sizeof(u2), &null, &outsz,
+                                       NULL, NULL);
+            u2 = ntohs(u2);
+            v = cson_value_new_integer(u2);
+            break;
+        default:
+            fprintf(stderr, "unknown unsigned integer size %d\n", f->len);
+            abort();
+        }
+        break;
+    case SERVER_BINT:
+        switch (f->len) {
+        case 9:
+            SERVER_BINT_to_CLIENT_INT((uint8_t *)rec + f->offset, f->len, NULL,
+                                      NULL, &i8, sizeof(i8), &null, &outsz,
+                                      NULL, NULL);
+            i8 = flibc_ntohll(i8);
+            v = cson_value_new_integer(i8);
+            break;
+        case 5:
+            SERVER_BINT_to_CLIENT_INT((uint8_t *)rec + f->offset, f->len, NULL,
+                                      NULL, &i4, sizeof(i4), &null, &outsz,
+                                      NULL, NULL);
+            i4 = ntohl(i4);
+            v = cson_value_new_integer(i4);
+            break;
+        case 3:
+            SERVER_BINT_to_CLIENT_INT((uint8_t *)rec + f->offset, f->len, NULL,
+                                      NULL, &i2, sizeof(i2), &null, &outsz,
+                                      NULL, NULL);
+            i2 = ntohs(i2);
+            v = cson_value_new_integer(i2);
+            break;
+        default:
+            fprintf(stderr, "unknown integer size %d\n", f->len);
+            abort();
+        }
+        break;
+    case SERVER_BREAL:
+        switch (f->len) {
+        case 9:
+            SERVER_BREAL_to_CLIENT_REAL((uint8_t *)rec + f->offset, f->len,
+                                        NULL, NULL, &r8, sizeof(r8), &null,
+                                        &outsz, NULL, NULL);
+            r8 = flibc_ntohd(r8);
+            v = cson_value_new_double(r8);
+            break;
+        case 5: {
+            SERVER_BREAL_to_CLIENT_REAL((uint8_t *)rec + f->offset, f->len,
+                                        NULL, NULL, &r4, sizeof(r4), &null,
+                                        &outsz, NULL, NULL);
+            r4 = flibc_ntohf(r4);
+            v = cson_value_new_double(r4);
+            break;
+        }
+        default:
+            fprintf(stderr, "unknown real size %d\n", f->len);
+            abort();
+        }
+        break;
+    case SERVER_BCSTR:
+        slen = cstrlenlim((const char *)rec + f->offset + 1, f->len - 1);
+        v = cson_value_new_string((uint8_t *)rec + f->offset + 1, slen);
+        break;
+    case SERVER_VUTF8:
+        /* these are blobs internally, but go out as strings, ie, the type
+           of this field is SP_FIELD_STRING */
+        if (record->blobs[f->blob_index].bloblen) {
+            v = cson_value_new_string(record->blobs[f->blob_index].blobdta,
+                                      record->blobs[f->blob_index].bloblen - 1);
+        } else {
+            int len;
+            /* The field is not null or append_field would not be called.  It
+             * must either be
+             * zero-length or fits in the inline portion. */
+            memcpy(&len, (uint8_t *)rec + f->offset + 1, sizeof(int));
+            len = ntohl(len);
+            v = cson_value_new_string(
+                (uint8_t *)rec + f->offset + 1 + sizeof(int), len);
+        }
+        break;
+    case SERVER_BYTEARRAY:
+        v = hex_encode_blob((uint8_t *)rec + f->offset + 1, f->len - 1);
+        break;
+    case SERVER_BLOB:
+        v = hex_encode_blob(record->blobs[f->blob_index].blobdta,
+                            record->blobs[f->blob_index].bloblen);
+        break;
+    case SERVER_BLOB2:
+        if (record->blobs[f->blob_index].bloblen) {
+            v = hex_encode_blob(record->blobs[f->blob_index].blobdta,
+                                record->blobs[f->blob_index].bloblen);
+        } else {
+            v = hex_encode_blob((uint8_t *)rec + f->offset + 1, f->len - 1);
+        }
+        break;
+    case SERVER_DATETIME: {
+        char cdt[256];
+        int null, outdtsz;
+        struct field_conv_opts_tz outopts = {.flags = FLD_CONV_TZONE};
+        strcpy(outopts.tzname, "UTC");
+        SERVER_DATETIME_to_CLIENT_CSTR(
+            (uint8_t *)rec + f->offset, sizeof(server_datetime_t), NULL, NULL,
+            &cdt, sizeof(cdt), &null, &outdtsz, (void *)&outopts, NULL);
+        v = cson_value_new_string(cdt, outdtsz - 1);
+        break;
+    }
+    case SERVER_DATETIMEUS: {
+        char cdt[96];
+        int null, outdtsz;
+        struct field_conv_opts_tz outopts = {.flags = FLD_CONV_TZONE};
+        strcpy(outopts.tzname, record->trans->iq->tzname);
+        SERVER_DATETIMEUS_to_CLIENT_CSTR(
+            (uint8_t *)rec + f->offset, sizeof(server_datetimeus_t), NULL, NULL,
+            &cdt, sizeof(cdt), &null, &outdtsz, (void *)&outopts, NULL);
+        v = cson_value_new_string(cdt, outdtsz - 1);
+        break;
+    }
+    case SERVER_INTVYM: {
+        char cym[64];
+        int null, outdtsz;
+        struct field_conv_opts_tz outopts = {.flags = FLD_CONV_TZONE};
+        strcpy(outopts.tzname, record->trans->iq->tzname);
+        SERVER_INTVYM_to_CLIENT_CSTR(
+            (uint8_t *)rec + f->offset, sizeof(server_intv_ym_t), NULL, NULL,
+            &cym, sizeof(cym), &null, &outdtsz, (void *)&outopts, NULL);
+        v = cson_value_new_string(cym, outdtsz - 1);
+        break;
+    }
+    case SERVER_INTVDS: {
+        char cds[64];
+        int null, outdtsz;
+        struct field_conv_opts_tz outopts = {.flags = FLD_CONV_TZONE};
+        strcpy(outopts.tzname, record->trans->iq->tzname);
+        SERVER_INTVDS_to_CLIENT_CSTR(
+            (uint8_t *)rec + f->offset, sizeof(server_intv_ds_t), NULL, NULL,
+            &cds, sizeof(cds), &null, &outdtsz, (void *)&outopts, NULL);
+        v = cson_value_new_string(cds, outdtsz - 1);
+        break;
+    }
+    case SERVER_INTVDSUS: {
+        char tmp[64];
+        int null, outdtsz;
+        struct field_conv_opts_tz outopts = {.flags = FLD_CONV_TZONE};
+        strcpy(outopts.tzname, record->trans->iq->tzname);
+        SERVER_INTVDSUS_to_CLIENT_CSTR(
+            (uint8_t *)rec + f->offset, sizeof(server_intv_dsus_t), NULL, NULL,
+            tmp, sizeof(tmp), &null, &outdtsz, (void *)&outopts, NULL);
+        v = cson_value_new_string(tmp, outdtsz - 1);
+        break;
+    }
+    case SERVER_DECIMAL: {
+        char str[124];
+        int outdtsz;
+        SERVER_DECIMAL_to_CLIENT_CSTR((uint8_t *)rec + f->offset, f->len, NULL,
+                                      NULL, str, sizeof(str), &null, &outdtsz,
+                                      NULL, NULL);
+        v = cson_value_new_string(str, outdtsz - 1);
+        break;
+    }
+    default:
+        fprintf(stderr, "unknown type %d\n", f->type);
+        abort();
+    }
+    cson_object_set(col, "value", v);
+}
+
+struct foo {
+    struct ireq *iq;
+    struct dbtable *usedb;
+    cson_array *json;
+};
+
+static __thread struct foo *foo;
+
+int pull_trigger(void *trans)
+{
+    if (foo == NULL)
+        return 0;
+
+    uint64_t seq;
+    bdb_lock_table_write(foo->usedb->handle, trans);
+    bdb_get_trigger_seq(trans, foo->usedb->tablename, &seq);
+    bdb_set_trigger_seq(trans, foo->usedb->tablename, seq + 1);
+
+    if (seq > INT64_MAX) abort(); /* teh lulz */
+
+    cson_object *event = cson_new_object();
+    cson_value *id = cson_new_int(seq);
+    cson_object_set(event, "id", id);
+    cson_object_set(event, "event", cson_array_value(foo->json));
+
+    cson_buffer buf = cson_buffer_empty;
+    cson_output_buffer(cson_object_value(event), &buf, NULL);
+
+    struct dbtable *orig = foo->iq->usedb;
+    foo->iq->usedb = foo->usedb;
+    int rc = dbq_add(foo->iq, trans, buf.mem, buf.used);
+    foo->iq->usedb = orig;
+    free(foo);
+    foo = NULL;
+
+    cson_buffer_reserve(&buf, 0);
+    cson_value_free(cson_object_value(event));
+    return rc;
+}
+
+int pull_trigger_sc(void *trans, struct javasp_trans_state *jsph,
+                    const char *type, const char *tbl, const char *payload)
+{
+    SP_READLOCK();
+    struct stored_proc *p;
+    struct sp_table *t;
+    LISTC_FOR_EACH(&stored_procs, p, lnk) {
+        if (p->replicant) break;
+    }
+
+    int rc = 0;
+    if (p) {
+        foo = malloc(sizeof(struct foo));
+        foo->json = cson_new_array();
+        foo->usedb = getqueuebyname(p->qname);
+        foo->iq = jsph->iq;
+
+        cson_value *v;
+        cson_object *jevent = cson_new_object();
+
+        v = cson_value_new_string(tbl, strlen(tbl));
+        cson_object_set(jevent, "tbl", v);
+
+        v = cson_value_new_string(type, strlen(type));
+        cson_object_set(jevent, "type", v);
+
+        if (payload) {
+            v = cson_value_new_string(payload, strlen(payload));
+            cson_object_set(jevent, "ddl", v);
+        }
+
+        cson_array_append(foo->json, cson_object_value(jevent));
+        rc = pull_trigger(trans);
+    }
+    SP_RELLOCK();
+    return rc;
+}
+
+static int replicant_trigger_run(struct javasp_trans_state *javasp_trans_handle,
+                                 struct stored_proc *p, int event,
+                                 struct javasp_rec *oldrec,
+                                 struct javasp_rec *newrec, const char *name)
+{
+    struct schema *s = find_tag_schema(name, ".ONDISK");
+    if (s == NULL) {
+        fprintf(stderr, "can't find schema for %s\n", name);
+        return -1;
+    }
+
+    if (foo == NULL) {
+        foo = malloc(sizeof(struct foo));
+        foo->json = cson_new_array();
+        foo->usedb = getqueuebyname(p->qname);
+        foo->iq = javasp_trans_handle->iq;
+    }
+
+    cson_value *v;
+    cson_object *jevent = cson_new_object();
+
+    v = cson_value_new_string(name, strlen(name));
+    cson_object_set(jevent, "tbl", v);
+
+    char gstr[sizeof(genid_t) * 2 + 1];
+    struct javasp_rec *g = newrec ? newrec : oldrec;
+    sprintf(gstr, "%llx", flibc_htonll(g->genid));
+    v = cson_value_new_string(gstr, strlen(gstr));
+    cson_object_set(jevent, "genid", v);
+
+    if (oldrec == NULL) {
+        v = cson_value_new_string("add", 3);
+    } else if (newrec == NULL) {
+        v = cson_value_new_string("del", 3);
+    } else {
+        v = cson_value_new_string("upd", 3);
+    }
+    cson_object_set(jevent, "type", v);
+
+    if (newrec == NULL)
+        goto done;
+
+    cson_array *cols = cson_new_array();
+    for (int i = 0; i < s->nmembers; i++) {
+        cson_object *col = cson_new_object();
+        const struct field *f = &s->member[i];
+        const char *type = type_to_spstr(f->type, f->len);
+        if (type == NULL) continue;
+
+        v = cson_value_new_string(f->name, strlen(f->name));
+        cson_object_set(col, "name", v);
+
+        v = cson_value_new_string(type, strlen(type));
+        cson_object_set(col, "type", v);
+
+        if (stype_is_null((uint8_t *)newrec->ondisk_dta + f->offset)) {
+            v = cson_value_null();
+            cson_object_set(col, "value", v);
+        } else {
+            append_json_field(col, f, newrec);
+        }
+        cson_array_append(cols, cson_object_value(col));
+    }
+    cson_object_set(jevent, "cols", cson_array_value(cols));
+done:
+    cson_array_append(foo->json, cson_object_value(jevent));
+    return 0;
+}
+
 static int sp_trigger_run(struct javasp_trans_state *javasp_trans_handle,
                           struct stored_proc *p, struct sp_table *t, int event,
                           struct javasp_rec *oldrec, struct javasp_rec *newrec)
@@ -751,7 +1168,6 @@ static int sp_trigger_run(struct javasp_trans_state *javasp_trans_handle,
     int sz;
     int rc = 0;
     struct byte_buffer bytes;
-    struct field *f;
     int i;
     struct sp_field *fld;
     struct dbtable *usedb;
@@ -774,15 +1190,15 @@ static int sp_trigger_run(struct javasp_trans_state *javasp_trans_handle,
     /* TODO: again, this can be much better */
     LISTC_FOR_EACH(&t->fields, fld, lnk)
     {
+        int all = strcmp(fld->name, "*") == 0;
         for (i = 0; i < s->nmembers; i++) {
             unsigned char field_name_len;
             char field_type;
             unsigned char before_flag;
             unsigned char after_flag;
-
-            f = &s->member[i];
-
-            if (strcasecmp(fld->name, f->name) == 0 && (event & fld->flags)) {
+            struct field *f = &s->member[i];
+            int match = all ? all : strcasecmp(fld->name, f->name) == 0;
+            if (match && (event & fld->flags)) {
                 /* we need to output this field */
                 field_type = type_to_sptype(f->type, f->len);
 
@@ -790,7 +1206,7 @@ static int sp_trigger_run(struct javasp_trans_state *javasp_trans_handle,
                 if (field_type == -1)
                     continue;
 
-                field_name_len = strlen(fld->name);
+                field_name_len = strlen(f->name);
                 byte_buffer_append(&bytes, &field_name_len, 1);
                 byte_buffer_append(&bytes, &field_type, 1);
 
@@ -814,7 +1230,7 @@ static int sp_trigger_run(struct javasp_trans_state *javasp_trans_handle,
                 byte_buffer_append(&bytes, &after_flag, 1);
 
                 /* field name */
-                byte_buffer_append(&bytes, fld->name, field_name_len + 1);
+                byte_buffer_append(&bytes, f->name, field_name_len + 1);
                 if (before_flag == FIELD_FLAG_VALUE) {
                     append_field(&bytes, f, oldrec);
                     nfields++;
@@ -823,7 +1239,8 @@ static int sp_trigger_run(struct javasp_trans_state *javasp_trans_handle,
                     append_field(&bytes, f, newrec);
                     nfields++;
                 }
-                break;
+                if (!all)
+                    break;
             }
         }
     }
@@ -850,8 +1267,7 @@ int javasp_trans_tagged_trigger(struct javasp_trans_state *javasp_trans_handle,
     struct sp_table *t;
     int rc;
 
-    if (javasp_trans_handle == NULL)
-        return 0;
+    if (javasp_trans_handle == NULL) return 0;
 
     SP_READLOCK();
 
@@ -860,24 +1276,23 @@ int javasp_trans_tagged_trigger(struct javasp_trans_state *javasp_trans_handle,
        off the table structure */
     LISTC_FOR_EACH(&stored_procs, p, lnk)
     {
-        LISTC_FOR_EACH(&p->tables, t, lnk)
-        {
-            if (strcasecmp(t->name, tblname) == 0 && (t->flags & event)) {
-                rc = sp_trigger_run(javasp_trans_handle, p, t, event, oldrec,
-                                    newrec);
-                if (rc) {
-                    SP_RELLOCK();
-                    return rc;
+        if (p->replicant) {
+                rc = replicant_trigger_run(javasp_trans_handle, p, event, oldrec, newrec, tblname);
+        } else {
+            LISTC_FOR_EACH(&p->tables, t, lnk)
+            {
+                if (strcasecmp(t->name, tblname) == 0 && t->flags & event) {
+                    rc = sp_trigger_run(javasp_trans_handle, p, t, event, oldrec, newrec);
+                    break;
                 }
-                goto nextproc;
             }
         }
-    nextproc:
-        ;
+        if (rc) {
+            SP_RELLOCK();
+            return rc;
+        }
     }
-
     SP_RELLOCK();
-
     return 0;
 }
 
@@ -967,13 +1382,11 @@ int javasp_do_procedure_op(int op, const char *name, const char *param,
     return rc;
 }
 
-int javasp_trans_care_about(struct javasp_trans_state *javasp_trans_handle,
-                            int event)
+int javasp_trans_care_about(struct javasp_trans_state *sph, int event)
 {
-    if (javasp_trans_handle)
-        return (javasp_trans_handle->events & event) == event;
-    else
+    if (sph == NULL)
         return 0;
+    return sph->replicant ? 1 : sph->events & event;
 }
 
 int javasp_custom_write(struct javasp_trans_state *javasp_trans_handle,
@@ -1114,11 +1527,10 @@ int javasp_add_procedure(const char *name, const char *jar, const char *param)
 
 static int sp_field_is_a_blob(const char *table, const char *field)
 {
-    struct dbtable *db;
+    if (strcmp(field, "*") == 0) return 1;
     int fnum;
     struct field *f;
-
-    db = get_dbtable_by_name(table);
+    struct dbtable *db = get_dbtable_by_name(table);
     if (db == NULL)
         return 0;
     for (fnum = 0; fnum < db->schema->nmembers; fnum++) {
@@ -1135,6 +1547,12 @@ static int sp_field_is_a_blob(const char *table, const char *field)
 }
 
 static const char *toksep = " \r\n\t";
+
+static int set_replicant(struct stored_proc *p)
+{
+    p->replicant = 1;
+    return 0;
+}
 
 int javasp_load_procedure_int(const char *name, const char *param,
                               const char *paramvalue)
@@ -1180,6 +1598,7 @@ int javasp_load_procedure_int(const char *name, const char *param,
         rc = -1;
         goto done;
     }
+    p->replicant = 0;
     if (paramvalue) {
         p->qname = strdup(name);
         if (!p->qname) goto oom;
@@ -1221,6 +1640,8 @@ int javasp_load_procedure_int(const char *name, const char *param,
             rc = -1;
             goto done;
         }
+    } else if (paramvalue == NULL || strcmp(paramvalue, "") == 0) {
+        set_replicant(p);
     } else {
         /* TODO: this works but isn't nice.  Dump the config to a file, and call
          * the code to parse the file, as before. */
@@ -1328,7 +1749,7 @@ int javasp_load_procedure_int(const char *name, const char *param,
                 goto done;
             }
 
-            LISTC_FOR_EACH(&table->fields, field, lnk)
+            if (strcmp(fieldname, "*") != 0) LISTC_FOR_EACH(&table->fields, field, lnk)
             {
                 if (strcasecmp(field->name, fieldname) == 0) {
                     logmsg(LOGMSG_ERROR, 
@@ -1473,4 +1894,13 @@ void get_trigger_info(const char *name, trigger_info *info)
     SP_READLOCK();
     get_trigger_info_int(name, info);
     SP_RELLOCK();
+}
+
+int get_next_seq(const char *qname, uint64_t *seq)
+{
+    int rc = bdb_get_trigger_seq(NULL, qname, seq);
+    if (rc)
+    fprintf(stderr, "%s: bdb_get_trigger_seq(%s) rc:%d seq:%" PRIu64 "\n",
+            __func__, qname, rc, *seq);
+    return rc;
 }

@@ -37,32 +37,32 @@ message bpfunc_alias {
     required string name = 2;
 }
 
-message bpfunc_analyze_threshold
-{   
+message bpfunc_analyze_threshold {
     required string tablename = 1;
     required int32 newvalue = 2;
 }
 
-message bpfunc_analyze_coverage
-{
+message bpfunc_analyze_coverage {
     required string tablename = 1;
     required int32 newvalue = 2;
 }
 
-message bpfunc_timepart_retention
-{
+message bpfunc_timepart_retention {
     required string timepartname = 1;
     required int32 newvalue = 2;
 }
 
-message bpfunc_rowlocks_enable
-{
+message bpfunc_rowlocks_enable {
     required int32 enable = 1;
 }
 
-message bpfunc_genid48_enable
-{
+message bpfunc_genid48_enable {
     required int32 enable = 1;
+}
+
+message bpfunc_replicant_seq {
+    required string qname = 1;
+    required int64 seq = 2;
 }
 
 message bpfunc_arg {
@@ -78,5 +78,6 @@ message bpfunc_arg {
     optional  bpfunc_timepart_retention tp_ret = 10;
     optional  bpfunc_rowlocks_enable rl_enable = 11;
     optional  bpfunc_genid48_enable gn_enable = 12;
+    optional  bpfunc_replicant_seq rep_seq = 13;
 }
 

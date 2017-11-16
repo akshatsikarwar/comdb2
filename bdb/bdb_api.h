@@ -848,6 +848,9 @@ int bdb_lite_fetch_keys_bwd(bdb_state_type *bdb_state, void *firstkey,
 int bdb_lite_fetch_keys_bwd_tran(bdb_state_type *bdb_state, tran_type *tran,
                                  void *firstkey, void *fndkeys, int maxfnd,
                                  int *numfnd, int *bdberr);
+int bdb_lite_fetch_partial_tran(bdb_state_type *bdb_state, tran_type *,
+                                void *key_in, int klen_in, void *key_out,
+                                int *fnd, int *bdberr);
 int bdb_lite_fetch_partial(bdb_state_type *bdb_state, void *key_in, int klen_in,
                            void *key_out, int *fnd, int *bdberr);
 
@@ -1985,5 +1988,8 @@ struct bias_info {
 
 void bdb_set_fld_hints(bdb_state_type *, uint16_t *);
 void rename_bdb_state(bdb_state_type *bdb_state, const char *newname);
+
+int bdb_set_trigger_seq(tran_type *, const char *, uint64_t);
+int bdb_get_trigger_seq(tran_type *, const char *, uint64_t *);
 
 #endif

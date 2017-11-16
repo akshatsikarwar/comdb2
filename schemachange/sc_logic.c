@@ -20,6 +20,8 @@
 #include <memory_sync.h>
 #include <str0.h>
 #include <views.h>
+#include <translistener.h>
+#include <analyze.h>
 
 #include "schemachange.h"
 #include "sc_global.h"
@@ -310,6 +312,22 @@ static int do_finalize(ddl_t func, struct ireq *iq, tran_type *input_tran,
         }
         return rc;
     }
+
+    struct javasp_trans_state *trigger = javasp_trans_start();
+    javasp_trans_set_trans(trigger, iq, tran);
+    strbuf *ddl = strbuf_new();
+    if (s->fastinit && s->drop_table) {
+        strbuf_appendf(ddl, "drop table %s", iq->usedb->tablename);
+    } else if (s->fastinit) {
+        strbuf_appendf(ddl, "truncate table %s", iq->usedb->tablename);
+    } else if (s->addonly) {
+        strbuf_appendf(ddl, "create table %s {%s}", iq->usedb->tablename, s->newcsc2);
+    } else if (s->alteronly) {
+        strbuf_appendf(ddl, "alter table %s {%s}", iq->usedb->tablename, s->newcsc2);
+    }
+    pull_trigger_sc(tran, trigger, "ddl", iq->usedb->tablename, strbuf_buf(ddl));
+    strbuf_free(ddl);
+    javasp_trans_end(trigger);
 
     if (input_tran == NULL) {
         // void all_locks(void*);

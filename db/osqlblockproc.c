@@ -1210,7 +1210,6 @@ int osql_bplog_reqlog_queries(struct ireq *iq)
 static int apply_changes(struct ireq *iq, blocksql_tran_t *tran, void *iq_tran,
                          int *nops, struct block_err *err, SBUF2 *logsb)
 {
-
     blocksql_info_t *info = NULL;
     int rc = 0;
     int out_rc = 0;

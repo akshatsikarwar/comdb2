@@ -5008,7 +5008,6 @@ static void register_all_int_switches()
 static void getmyid(void)
 {
     char name[1024];
-
     if (gethostname(name, sizeof(name))) {
         logmsg(LOGMSG_ERROR, "%s: Failure to get local hostname!!!\n", __func__);
         gbl_myhostname = "UNKNOWN";
@@ -5203,6 +5202,7 @@ int main(int argc, char **argv)
     sighold(SIGPIPE); /*dothis before kicking off any threads*/
 
     thrman_init();
+
     javasp_once_init();
 
     register_all_int_switches();
