@@ -4246,7 +4246,7 @@ static int db_consumer(Lua L)
         if (rc != CDB2_TRIG_REQ_SUCCESS) return luaL_error(L, sp->error);
         break;
     default:
-        luabb_error(L, sp, "so such consumer");
+        luabb_error(L, sp, "no such consumer");
         lua_pushnil(L);
         return 1;
     }
@@ -6165,20 +6165,16 @@ static uint8_t *consume_field(Lua L, uint8_t *payload)
     return payload;
 }
 
-static int push_replicant_arg(Lua L, uint8_t *payload, size_t len)
-{
-    lua_pushlstring(L, payload, len);
-    return 1;
-}
-
 static int push_trigger_args_int(Lua L, dbconsumer_t *q, struct qfound *f, char **err)
 {
     uint8_t *payload = ((uint8_t *)f->item) + f->dtaoff;
     size_t len = f->len - f->dtaoff;
     q->genid = f->item->genid;
     if (q->type == CONSUMER_TYPE_REP) {
-        return push_replicant_arg(L, payload, len);
+        lua_pushlstring(L, payload, len);
+        return 1;
     }
+    f->item->genid = flibc_htonll(f->item->genid);
     /*
     char header[] = "CDB2_UPD";
     if (memcmp(payload, header, sizeof(header)) != 0) {

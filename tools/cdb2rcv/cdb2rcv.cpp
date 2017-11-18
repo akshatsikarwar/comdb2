@@ -313,7 +313,6 @@ int main(int argc, char **argv)
         cache_path += '/';
     cache_path += d;
     cache_path += ".cache";
-    std::cout << cache_path << std::endl;
     sqlite3_open(cache_path.c_str(), &cache);
     const char *create = "create table if not exists events(id integer primary "
                          "key, event text) without rowid";
