@@ -1,5 +1,5 @@
 add_executable(cdb2rcv cdb2rcv.cpp)
-add_definitions(-DSQLITE_BKUP)
+#add_definitions(-DSQLITE_BKUP)
 include_directories(
   ${PROJECT_SOURCE_DIR}/cdb2api
   ${PROJECT_SOURCE_DIR}/cson
@@ -15,4 +15,4 @@ if(WITH_SSL)
   list(APPEND libs ${OPENSSL_LIBRARIES} ${ZLIB_LIBRARIES} ${CMAKE_DL_LIBS})
 endif()
 target_link_libraries(cdb2rcv ${libs})
-#install(TARGETS cdb2rcv RUNTIME DESTINATION bin)
+install(TARGETS cdb2rcv RUNTIME DESTINATION bin)

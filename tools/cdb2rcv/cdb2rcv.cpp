@@ -13,6 +13,12 @@
 
 static int run_stmt(cdb2_hndl_tp *db, const char *sql)
 {
+    if (strncmp(sql, "begin", 5) != 0 &&
+        strncmp(sql, "commit", 6) != 0 &&
+        strncmp(sql, "put", 3) != 0) {
+        puts(sql);
+    }
+
     int rc = cdb2_run_statement(db, sql);
     while (rc == CDB2_OK) {
         rc = cdb2_next_record(db);
