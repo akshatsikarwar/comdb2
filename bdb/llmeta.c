@@ -157,7 +157,8 @@ typedef enum {
     LLMETA_DEFAULT_VERSIONED_SP = 43,
     LLMETA_TABLE_USER_SCHEMA = 44,
     LLMETA_USER_PASSWORD_HASH = 45,
-    LLMETA_FVER_FILE_TYPE_QDB = 46 /* file version for a dbqueue */
+    LLMETA_FVER_FILE_TYPE_QDB = 46, /* file version for a dbqueue */
+    LLMETA_TRIGGER_FULL_TABLE = 47,
 } llmetakey_t;
 
 struct llmeta_file_type_key {
@@ -8756,5 +8757,65 @@ int bdb_rename_table_metadata(bdb_state_type *bdb_state, tran_type *tran,
     if (rc)
         return rc;
 
+    return rc;
+}
+
+/*
+** Flag for full table trigger
+** If set, include all columns in queue payload.
+*/
+struct trigger_full_table_t {
+    int32_t key; // LLMETA_TRIGGER_FULL_TABLE
+    char qname[LLMETA_SPLEN + 3]; // __qfoobar
+};
+
+int bdb_get_trigger_full_table(const char *qname, int *val)
+{
+    *val = 0;
+    union {
+        struct trigger_full_table_t sp;
+        uint8_t buf[LLMETA_IXLEN];
+    } u = {0};
+    u.sp.key = htonl(LLMETA_TRIGGER_FULL_TABLE);
+    strcpy(u.sp.qname, qname);
+    void **u1 = NULL;
+    int num, bdberr;
+    int rc = kv_get(&u, sizeof(u), &u1, &num, &bdberr);
+    if (rc == 0 && num == 1) {
+        *val = 1;
+    }
+    for (int i = 0; i < num; ++i) {
+        free(u1[i]);
+    }
+    free(u1);
+    return rc;
+}
+
+int bdb_add_trigger_full_table(tran_type *tran, const char *qname)
+{
+    union {
+        struct trigger_full_table_t sp;
+        uint8_t buf[LLMETA_IXLEN];
+    } u = {0};
+    u.sp.key = htonl(LLMETA_TRIGGER_FULL_TABLE);
+    strcpy(u.sp.qname, qname);
+    int bdberr;
+    uint8_t on = 1;
+    return kv_put(tran, &u, &on, sizeof(on), &bdberr);
+}
+
+int bdb_del_trigger_full_table(tran_type *tran, const char *qname)
+{
+    union {
+        struct trigger_full_table_t sp;
+        uint8_t buf[LLMETA_IXLEN];
+    } u = {0};
+    u.sp.key = htonl(LLMETA_TRIGGER_FULL_TABLE);
+    strcpy(u.sp.qname, qname);
+    int bdberr;
+    int rc = kv_del(tran, &u, &bdberr);
+    if (rc && bdberr == BDBERR_DEL_DTA) {
+        rc = 0;
+    }
     return rc;
 }

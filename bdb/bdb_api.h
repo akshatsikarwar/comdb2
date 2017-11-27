@@ -1986,4 +1986,8 @@ struct bias_info {
 void bdb_set_fld_hints(bdb_state_type *, uint16_t *);
 void rename_bdb_state(bdb_state_type *bdb_state, const char *newname);
 
+int bdb_get_trigger_full_table(const char *, int *);
+int bdb_add_trigger_full_table(tran_type *, const char *);
+int bdb_del_trigger_full_table(tran_type *, const char *);
+
 #endif

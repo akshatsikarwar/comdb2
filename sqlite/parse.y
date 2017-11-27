@@ -1693,6 +1693,17 @@ getcmd ::= ANALYZE THRESHOLD nm(Y) dbnm(Z). {
     comdb2getAnalyzeThreshold(pParse,&Y,&Z);
 }
 
+/*
+** This is ugly but I did not want to introduce any new keywords..
+** Examples:
+**   GET CONSUMER foo FULL TABLE
+**   PUT CONSUMER foo FULL TABLE ON
+**   PUT TRIGGER bar FULL TABLE OFF
+*/
+getcmd ::= method(A) nm(B) JOIN_KW(C) TABLE. {
+    comdb2GetTriggerFullTable(pParse,A,&B,&C);
+}
+
 ///////////////////// COMDB2 PUT statements //////////////////////////////////
 
 cmd ::= PUT putcmd. {
@@ -1790,6 +1801,18 @@ putcmd ::= SCHEMACHANGE CONVERTSLEEP INTEGER(F). {
 putcmd ::= TUNABLE nm(N) INTEGER|FLOAT|STRING(M). {
     comdb2putTunable(pParse, &N, &M);
 }
+
+putcmd ::= method(A) nm(B) JOIN_KW(C) TABLE onoff(D). {
+    comdb2TriggerFullTable(pParse, A, &B, &C, D);
+}
+
+%type method {int}
+method(A) ::= TRIGGER. { A = 0; }
+method(A) ::= CONSUMER. { A = 1; }
+
+%type onoff {int}
+onoff(A) ::= OFF. { A = 0; }
+onoff(A) ::= ON. { A = 1; }
 
 ///////////////////// COMDB2 REBUILD STATEMENTS //////////////////////////////
 

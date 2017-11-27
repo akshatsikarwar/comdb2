@@ -12,8 +12,6 @@
 
 extern int gbl_check_access_controls;
 
-/*                           FUNCTION DECLARATIONS */
-
 static int prepare_create_timepart(bpfunc_t *tp);
 static int prepare_drop_timepart(bpfunc_t *tp);
 static int prepare_timepart_retention(bpfunc_t *tp);
@@ -26,6 +24,8 @@ static int exec_analyze_coverage(void *tran, bpfunc_t *func, char *err);
 static int exec_rowlocks_enable(void *tran, bpfunc_t *func, char *err);
 static int exec_genid48_enable(void *tran, bpfunc_t *func, char *err);
 static int exec_set_skipscan(void *tran, bpfunc_t *func, char *err);
+static int trigger_full_table(void *tran, bpfunc_t *func, char *err);
+
 /********************      UTILITIES     ***********************/
 
 static int empty(void *tran, bpfunc_t *func, char *err) { return 0; }
@@ -103,6 +103,10 @@ static int prepare_methods(bpfunc_t *func, bpfunc_info *info)
 
     case BPFUNC_SET_SKIPSCAN:
         func->exec = exec_set_skipscan;
+        break;
+
+    case BPFUNC_TRIGGER_FULL_TABLE:
+        func->exec = trigger_full_table;
         break;
 
     default:
@@ -500,3 +504,12 @@ static int exec_rowlocks_enable(void *tran, bpfunc_t *func, char *err)
     return rc;
 }
 
+static int trigger_full_table(void *tran, bpfunc_t *func, char *err)
+{
+    BpfuncTriggerFullTable *x = func->arg->trigger_full_table;
+    if (x->value) {
+        return bdb_add_trigger_full_table(tran, x->trigger_name);
+    } else {
+        return bdb_del_trigger_full_table(tran, x->trigger_name);
+    }
+}

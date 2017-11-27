@@ -16,6 +16,9 @@
 #include <comdb2vdbe.h>
 #include <trigger.h>
 #include <sqlglue.h>
+#include <bpfunc.pb-c.h>
+#include <bpfunc.h>
+#include <comdb2vdbe.h>
 
 struct dbtable;
 struct dbtable *getqueuebyname(const char *);
@@ -290,3 +293,80 @@ void comdb2DropAggFunc(Parse *parse, Token *proc)
 	comdb2DropFunc(parse, proc, a, aggregate);
 }
 
+void comdb2TriggerFullTable(Parse *pParse, int method, Token *proc, Token *kw,
+			    int onoff)
+{
+	TokenStr(spname, proc);
+	Q4SP(qname, spname);
+	if (!getqueuebyname(qname)) {
+		sqlite3ErrorMsg(pParse, "no such %s: %s",
+				method ? "Consumer" : "Trigger", spname);
+		return;
+	}
+	TokenStr(full, kw);
+	if (strcasecmp(full, "full") != 0) {
+		sqlite3ErrorMsg(pParse, "near \"%T\": syntax error", kw);
+		return;
+	}
+	BpfuncTriggerFullTable *full_table = malloc(sizeof(*full_table));
+	BpfuncArg *arg = arg = malloc(sizeof(*arg));
+	if (full_table == NULL || arg == NULL) {
+		sqlite3ErrorMsg(pParse, "%s: malloc failed", __func__);
+		free(full_table);
+		free(arg);
+		return;
+	}
+	bpfunc_trigger_full_table__init(full_table);
+	full_table->trigger_name = strdup(qname);
+	full_table->value = onoff;
+
+	bpfunc_arg__init(arg);
+	arg->trigger_full_table = full_table;
+	arg->type = BPFUNC_TRIGGER_FULL_TABLE;
+
+	Vdbe *v = sqlite3GetVdbe(pParse);
+	comdb2prepareNoRows(v, pParse, 0, arg, comdb2SendBpfunc,
+			    (vdbeFuncArgFree)&free_bpfunc_arg);
+}
+
+static int produceTriggerFullTable(OpFunc *f)
+{
+	int val;
+	const char *spname = f->arg;
+	if (bdb_get_trigger_full_table(spname, &val) == 0) {
+		opFuncWriteInteger(f, val);
+		f->rc = SQLITE_OK;
+		f->errorMsg = NULL;
+	} else {
+		f->rc = SQLITE_INTERNAL;
+		f->errorMsg = "Could not read value";
+	}
+	return SQLITE_OK;
+}
+
+void comdb2GetTriggerFullTable(Parse *pParse, int method, Token *proc,
+			       Token *kw)
+{
+	TokenStr(spname, proc);
+	Q4SP(qname, spname);
+	if (!getqueuebyname(qname)) {
+		sqlite3ErrorMsg(pParse, "no such %s: %s",
+				method ? "Consumer" : "Trigger", spname);
+		return;
+	}
+	TokenStr(full, kw);
+	if (strcasecmp(full, "full") != 0) {
+		sqlite3ErrorMsg(pParse, "near \"%T\": syntax error", kw);
+		return;
+	}
+	const char *names[] = {"value"};
+	const int types[] = {OPFUNC_INT_TYPE};
+	OpFuncSetup rows = {.n_cols = 1,
+			    .cols_names = names,
+			    .cols_types = types,
+			    .buf_size = 128};
+	comdb2prepareOpFunc(sqlite3GetVdbe(pParse), pParse, 0, strdup(qname),
+			    produceTriggerFullTable, (vdbeFuncArgFree)free,
+			    &rows);
+	return;
+}
