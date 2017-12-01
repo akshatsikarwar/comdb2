@@ -741,21 +741,60 @@ static void append_field(struct byte_buffer *bytes, struct field *f,
     }
 }
 
+static void output_field(struct byte_buffer *bytes, struct field *f,
+                         struct javasp_rec *oldrec, struct javasp_rec *newrec)
+{
+    unsigned char before_flag;
+    unsigned char after_flag;
+
+    char field_type = type_to_sptype(f->type, f->len);
+    if (field_type == -1) {
+        /* if we don't know what this is, don't output it */
+        return;
+    }
+
+    unsigned char field_name_len = strlen(f->name);
+    byte_buffer_append(bytes, &field_name_len, 1);
+    byte_buffer_append(bytes, &field_type, 1);
+
+    /* before/after flags */
+    if (oldrec == NULL)
+        before_flag = FIELD_FLAG_ABSENT;
+    else if (stype_is_null((uint8_t *)oldrec->ondisk_dta + f->offset))
+        before_flag = FIELD_FLAG_NULL;
+    else
+        before_flag = FIELD_FLAG_VALUE;
+    if (newrec == NULL)
+        after_flag = FIELD_FLAG_ABSENT;
+    else if (stype_is_null((uint8_t *)newrec->ondisk_dta + f->offset))
+        after_flag = FIELD_FLAG_NULL;
+    else
+        after_flag = FIELD_FLAG_VALUE;
+
+    byte_buffer_append(bytes, &before_flag, 1);
+    byte_buffer_append(bytes, &after_flag, 1);
+
+    /* field name */
+    byte_buffer_append(bytes, f->name, field_name_len + 1);
+    if (before_flag == FIELD_FLAG_VALUE) {
+        append_field(bytes, f, oldrec);
+    }
+    if (after_flag == FIELD_FLAG_VALUE) {
+        append_field(bytes, f, newrec);
+    }
+}
+
 /* This is the actual "stored procedure" call. */
 static int sp_trigger_run(struct javasp_trans_state *javasp_trans_handle,
                           struct stored_proc *p, struct sp_table *t, int event,
                           struct javasp_rec *oldrec, struct javasp_rec *newrec)
 {
-
     struct schema *s;
-    int sz;
     int rc = 0;
     struct byte_buffer bytes;
-    struct field *f;
     int i;
     struct sp_field *fld;
     struct dbtable *usedb;
-    int nfields = 0;
 
     /* TODO: can cache most of this information, don't allocate 2 buffers per
        record, don't
@@ -775,54 +814,9 @@ static int sp_trigger_run(struct javasp_trans_state *javasp_trans_handle,
     LISTC_FOR_EACH(&t->fields, fld, lnk)
     {
         for (i = 0; i < s->nmembers; i++) {
-            unsigned char field_name_len;
-            char field_type;
-            unsigned char before_flag;
-            unsigned char after_flag;
-
-            f = &s->member[i];
-
+            struct field *f = &s->member[i];
             if (strcasecmp(fld->name, f->name) == 0 && (event & fld->flags)) {
-                /* we need to output this field */
-                field_type = type_to_sptype(f->type, f->len);
-
-                /* if we don't know what this is, don't output it */
-                if (field_type == -1)
-                    continue;
-
-                field_name_len = strlen(fld->name);
-                byte_buffer_append(&bytes, &field_name_len, 1);
-                byte_buffer_append(&bytes, &field_type, 1);
-
-                /* before/after flags */
-                if (oldrec == NULL)
-                    before_flag = FIELD_FLAG_ABSENT;
-                else if (stype_is_null((uint8_t *)oldrec->ondisk_dta +
-                                       f->offset))
-                    before_flag = FIELD_FLAG_NULL;
-                else
-                    before_flag = FIELD_FLAG_VALUE;
-                if (newrec == NULL)
-                    after_flag = FIELD_FLAG_ABSENT;
-                else if (stype_is_null((uint8_t *)newrec->ondisk_dta +
-                                       f->offset))
-                    after_flag = FIELD_FLAG_NULL;
-                else
-                    after_flag = FIELD_FLAG_VALUE;
-
-                byte_buffer_append(&bytes, &before_flag, 1);
-                byte_buffer_append(&bytes, &after_flag, 1);
-
-                /* field name */
-                byte_buffer_append(&bytes, fld->name, field_name_len + 1);
-                if (before_flag == FIELD_FLAG_VALUE) {
-                    append_field(&bytes, f, oldrec);
-                    nfields++;
-                }
-                if (after_flag == FIELD_FLAG_VALUE) {
-                    append_field(&bytes, f, newrec);
-                    nfields++;
-                }
+                output_field(&bytes, f, oldrec, newrec);
                 break;
             }
         }
