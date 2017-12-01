@@ -2101,3 +2101,11 @@ flushed_buffer:
 }
 
 enum consumer_t consumer_type(struct consumer *c) { return c->type; }
+
+int is_full_table(const char *qname)
+{
+    int fulltable;
+    bdb_get_trigger_full_table(qname, &fulltable);
+    printf("%s qname:%s fulltable:%d\n", __func__, qname, fulltable);
+    return fulltable;
+}

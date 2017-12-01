@@ -211,4 +211,5 @@ typedef struct {
     LISTC_T(trigger_tbl_info) tbls;
 } trigger_info;
 void get_trigger_info(const char *, trigger_info *);
+void javasp_put_full_table(const char *qname, int val);
 #endif

@@ -7,6 +7,7 @@
 #include <bdb_access.h>
 #include <bpfunc.pb-c.h>
 #include <bdb_schemachange.h>
+#include <translistener.h>
 
 #include <logmsg.h>
 
@@ -507,9 +508,10 @@ static int exec_rowlocks_enable(void *tran, bpfunc_t *func, char *err)
 static int trigger_full_table(void *tran, bpfunc_t *func, char *err)
 {
     BpfuncTriggerFullTable *x = func->arg->trigger_full_table;
-    if (x->value) {
-        return bdb_add_trigger_full_table(tran, x->trigger_name);
-    } else {
-        return bdb_del_trigger_full_table(tran, x->trigger_name);
+    int rc = x->value ? bdb_add_trigger_full_table(tran, x->trigger_name)
+                      : bdb_del_trigger_full_table(tran, x->trigger_name);
+    if (rc == 0) {
+        javasp_put_full_table(x->trigger_name, x->value);
     }
+    return rc;
 }

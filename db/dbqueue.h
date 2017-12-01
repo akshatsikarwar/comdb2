@@ -88,4 +88,5 @@ struct consumer {
     int please_stop;
     int stopped;
 };
+int is_full_table(const char *qname);
 #endif

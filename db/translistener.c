@@ -34,6 +34,7 @@
 #include "comdb2.h"
 #include "translistener.h"
 #include "endian_core.h"
+#include <dbqueue.h>
 
 #include <tcputil.h>
 #include <unistd.h>
@@ -77,6 +78,7 @@ struct stored_proc {
 
     char *qname;
     int flags;
+    int full_table;
     LISTC_T(struct sp_table) tables;
     LINKC_T(struct stored_proc) lnk;
 };
@@ -810,6 +812,14 @@ static int sp_trigger_run(struct javasp_trans_state *javasp_trans_handle,
     }
 
     append_header(&bytes, t->name, event);
+
+    if (p->full_table) {
+        if ((event & p->flags)) {
+            for (i = 0; i < s->nmembers; i++) {
+                output_field(&bytes, &s->member[i], oldrec, newrec);
+            }
+        }
+    } else
     /* TODO: again, this can be much better */
     LISTC_FOR_EACH(&t->fields, fld, lnk)
     {
@@ -1165,6 +1175,7 @@ int javasp_load_procedure_int(const char *name, const char *param,
         rc = -1;
         goto done;
     }
+    p->full_table = is_full_table(name);
     p->name = strdup(name);
     if (!p->name) {
     oom:
@@ -1466,5 +1477,18 @@ void get_trigger_info(const char *name, trigger_info *info)
 {
     SP_READLOCK();
     get_trigger_info_int(name, info);
+    SP_RELLOCK();
+}
+
+void javasp_put_full_table(const char *qname, int full_table)
+{
+    struct stored_proc *p;
+    SP_WRITELOCK();
+    LISTC_FOR_EACH(&stored_procs, p, lnk) {
+        if (strcmp(qname, p->name) == 0) {
+            p->full_table = full_table;
+            printf("%s %s -> %d\n", __func__, qname, full_table);
+        }
+    }
     SP_RELLOCK();
 }
