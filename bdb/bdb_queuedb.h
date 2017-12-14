@@ -36,7 +36,7 @@ int bdb_queuedb_get(bdb_state_type *bdb_state, int consumer,
                     const struct bdb_queue_cursor *prevcursor, void **fnd,
                     size_t *fnddtalen, size_t *fnddtaoff,
                     struct bdb_queue_cursor *fndcursor, unsigned int *epoch,
-                    int *bdberr);
+                    int *bdberr, int flag);
 
 int bdb_queuedb_consume(bdb_state_type *bdb_state, tran_type *tran,
                         int consumer, const void *prevfnd, int *bdberr);

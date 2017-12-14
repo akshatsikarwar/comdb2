@@ -125,6 +125,7 @@ typedef struct {
     struct ireq iq;
     struct consumer *consumer;
     genid_t genid;
+    genid_t last_genid;
 
     /* signaling from libdb on qdb insert */
     pthread_mutex_t *lock;
@@ -649,8 +650,24 @@ static const int dbq_delay = 1000; // ms
 // If IX_FND will push Lua table on stack.
 static int dbq_poll_int(Lua L, dbconsumer_t *q)
 {
+    int rc;
+    if (q->last_genid == 0) {
+        struct qfound l = {0};
+        rc = dbq_get_last(&q->iq, 0, NULL, (void **)&l.item, &l.len, &l.dtaoff,
+                          NULL, NULL);
+        if (rc == IX_NOTFND) {
+            goto out;
+        }
+        if (rc == 0) {
+            q->last_genid = l.item->genid;
+            free(l.item);
+        }
+    }
+
     struct qfound f = {0};
-    int rc = dbq_get(&q->iq, 0, NULL, (void**)&f.item, &f.len, &f.dtaoff, NULL, NULL);
+    rc = dbq_get(&q->iq, 0, NULL, (void **)&f.item, &f.len, &f.dtaoff, NULL,
+                 NULL);
+out:
     pthread_mutex_unlock(q->lock);
     getsp(L)->num_instructions = 0;
     if (rc == 0) {
@@ -808,6 +825,9 @@ static int dbconsumer_consume_int(Lua L, dbconsumer_t *q)
     enum consumer_t type = consumer_type(q->consumer);
     int rc = (type == CONSUMER_TYPE_LUA) ? lua_trigger_impl(L, q)
                                          : lua_consumer_impl(L, q);
+    if (q->genid == q->last_genid) {
+        q->last_genid = 0;
+    }
     q->genid = 0;
     return rc;
 }

@@ -1665,14 +1665,14 @@ int bdb_queue_get(bdb_state_type *bdb_state, int consumer,
                   const struct bdb_queue_cursor *prevcursor, void **fnd,
                   size_t *fnddtalen, size_t *fnddtaoff,
                   struct bdb_queue_cursor *fndcursor, unsigned int *epoch,
-                  int *bdberr)
+                  int *bdberr, int flag)
 {
     int rc;
 
     BDB_READLOCK("bdb_queue_get");
     if (bdb_state->bdbtype == BDBTYPE_QUEUEDB)
         rc = bdb_queuedb_get(bdb_state, consumer, prevcursor, fnd, fnddtalen,
-                             fnddtaoff, fndcursor, epoch, bdberr);
+                             fnddtaoff, fndcursor, epoch, bdberr, flag);
     else
         rc = bdb_queue_get_int(bdb_state, consumer, prevcursor, fnd, fnddtalen,
                                fnddtaoff, fndcursor, epoch, bdberr);
