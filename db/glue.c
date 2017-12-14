@@ -5371,9 +5371,11 @@ int dbq_consume_goose(struct ireq *iq, void *trans)
     return map_unhandled_bdb_wr_rcode("bdb_queue_consume_goose", bdberr);
 }
 
-int dbq_get(struct ireq *iq, int consumer, const struct dbq_cursor *prevcursor,
-            void **fnddta, size_t *fnddtalen, size_t *fnddtaoff,
-            struct dbq_cursor *fndcursor, unsigned int *epoch)
+static int dbq_get_int(struct ireq *iq, int consumer,
+                       const struct dbq_cursor *prevcursor, void **fnddta,
+                       size_t *fnddtalen, size_t *fnddtaoff,
+                       struct dbq_cursor *fndcursor, unsigned int *epoch,
+                       int flag)
 {
     int bdberr;
     void *bdb_handle;
@@ -5388,7 +5390,8 @@ retry:
     rc = bdb_queue_get(bdb_handle, consumer,
                        (const struct bdb_queue_cursor *)prevcursor, fnddta,
                        fnddtalen, fnddtaoff,
-                       (struct bdb_queue_cursor *)fndcursor, epoch, &bdberr);
+                       (struct bdb_queue_cursor *)fndcursor, epoch, &bdberr,
+                       flag);
     iq->gluewhere = "bdb_queue_get done";
     if (rc != 0) {
         if (bdberr == BDBERR_DEADLOCK) {
@@ -5412,6 +5415,23 @@ retry:
         return map_unhandled_bdb_rcode("bdb_queue_get", bdberr, 0);
     }
     return rc;
+}
+
+int dbq_get(struct ireq *iq, int consumer, const struct dbq_cursor *prevcursor,
+            void **fnddta, size_t *fnddtalen, size_t *fnddtaoff,
+            struct dbq_cursor *fndcursor, unsigned int *epoch)
+{
+    return dbq_get_int(iq, consumer, prevcursor, fnddta, fnddtalen, fnddtaoff,
+                       fndcursor, epoch, 0);
+}
+
+int dbq_get_last(struct ireq *iq, int consumer,
+                 const struct dbq_cursor *prevcursor, void **fnddta,
+                 size_t *fnddtalen, size_t *fnddtaoff,
+                 struct dbq_cursor *fndcursor, unsigned int *epoch)
+{
+    return dbq_get_int(iq, consumer, prevcursor, fnddta, fnddtalen, fnddtaoff,
+                       fndcursor, epoch, 1);
 }
 
 unsigned long long dbq_item_genid(const void *dta)

@@ -299,7 +299,7 @@ int bdb_queuedb_get(bdb_state_type *bdb_state, int consumer,
                     const struct bdb_queue_cursor *prevcursor, void **fnd,
                     size_t *fnddtalen, size_t *fnddtaoff,
                     struct bdb_queue_cursor *fndcursor, unsigned int *epoch,
-                    int *bdberr)
+                    int *bdberr, int flag)
 {
 
     if (bdb_state->dbp_data[0][0] == NULL) { // trigger dropped?
@@ -351,7 +351,7 @@ int bdb_queuedb_get(bdb_state_type *bdb_state, int consumer,
     }
 
     qstate->stats.n_physical_gets++;
-    rc = dbcp->c_get(dbcp, &dbt_key, &dbt_data, DB_SET_RANGE);
+    rc = dbcp->c_get(dbcp, &dbt_key, &dbt_data, flag ? DB_LAST : DB_SET_RANGE);
     if (rc) {
         if (rc == DB_LOCK_DEADLOCK) {
             *bdberr = BDBERR_DEADLOCK;
