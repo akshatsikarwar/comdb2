@@ -2034,5 +2034,7 @@ int bdb_process_each_table_idx_entry(bdb_state_type *bdb_state, tran_type *tran,
 
 int bdb_check_files_on_disk(bdb_state_type *bdb_state, const char *tblname,
                             int *bdberr);
+void bdb_set_cluster_lsn(bdb_state_type *, seqnum_type *);
+void bdb_get_cluster_lsn(bdb_state_type *, uint32_t *, uint32_t *);
 
 #endif

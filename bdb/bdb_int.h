@@ -714,6 +714,7 @@ typedef LISTC_T(struct waiting_for_lsn) wait_for_lsn_list;
 
 typedef struct {
     seqnum_type *seqnums; /* 1 per node num */
+    DB_LSN cluster_lsn;
     pthread_mutex_t lock;
     pthread_cond_t cond;
     pthread_key_t key;

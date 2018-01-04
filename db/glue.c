@@ -698,6 +698,8 @@ static int trans_wait_for_seqnum_int(void *bdb_handle, struct dbenv *dbenv,
     end_ms = comdb2_time_epochms();
     iq->reptimems = end_ms - start_ms;
 
+    bdb_set_cluster_lsn(bdb_handle, (seqnum_type *)ss);
+
     return rc;
 }
 

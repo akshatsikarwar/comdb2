@@ -2678,3 +2678,25 @@ int bdb_set_tran_lowpri(bdb_state_type *bdb_state, tran_type *tran)
     return bdb_state->dbenv->set_tran_lowpri(bdb_state->dbenv,
                                              tran->tid->txnid);
 }
+
+void bdb_set_cluster_lsn(bdb_state_type *bdb_state, seqnum_type *commit)
+{
+    if (commit->lsn.file == 0) return;
+    printf("%s commit lsn %u:%u\n", __func__, commit->lsn.file, commit->lsn.offset);
+    seqnum_info_type *s = bdb_state->seqnum_info;
+    Pthread_mutex_lock(&s->lock);
+    if (log_compare(&s->cluster_lsn, &commit->lsn) < 0) {
+        s->cluster_lsn = commit->lsn;
+    }
+    Pthread_mutex_unlock(&s->lock);
+}
+
+void bdb_get_cluster_lsn(bdb_state_type *bdb_state, uint32_t *file,
+                         uint32_t *offset)
+{
+    seqnum_info_type *s = bdb_state->seqnum_info;
+    Pthread_mutex_lock(&s->lock);
+    *file = s->cluster_lsn.file;
+    *offset = s->cluster_lsn.offset;
+    Pthread_mutex_unlock(&s->lock);
+}
