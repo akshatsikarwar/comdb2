@@ -1084,7 +1084,14 @@ enum {
     USER_TYPE_ADD_NAME,
     USER_TYPE_DEL_NAME,
     USER_TYPE_TRANSFERMASTER_NAME,
-    USER_TYPE_REQ_START_LSN
+    USER_TYPE_REQ_START_LSN,
+    USER_TYPE_CLUSTER_LSN
+
+    /* nethandler types */
+
+    /*
+    ** net/net_types.h - enum starts at 100
+    */
 };
 
 void print(bdb_state_type *bdb_state, char *format, ...);
@@ -1864,5 +1871,7 @@ int has_low_headroom(const char *path, int threshold, int debug);
 
 const char *deadlock_policy_str(u_int32_t policy);
 int deadlock_policy_max();
+
+NETFP handle_cluster_lsn_req;
 
 #endif /* __bdb_int_h__ */

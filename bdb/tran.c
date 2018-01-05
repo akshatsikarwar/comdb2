@@ -2682,7 +2682,6 @@ int bdb_set_tran_lowpri(bdb_state_type *bdb_state, tran_type *tran)
 void bdb_set_cluster_lsn(bdb_state_type *bdb_state, seqnum_type *commit)
 {
     if (commit->lsn.file == 0) return;
-    printf("%s commit lsn %u:%u\n", __func__, commit->lsn.file, commit->lsn.offset);
     seqnum_info_type *s = bdb_state->seqnum_info;
     Pthread_mutex_lock(&s->lock);
     if (log_compare(&s->cluster_lsn, &commit->lsn) < 0) {

@@ -5645,4 +5645,38 @@ int request_durable_lsn_from_master(bdb_state_type *bdb_state,
     return 0;
 }
 
+int get_cluster_lsn(bdb_state_type *bdb_state, uint32_t *file, uint32_t *offset)
+{
+    if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
+        bdb_get_cluster_lsn(bdb_state, file, offset);
+        return 0;
+    }
+    uint8_t *buf = NULL;
+    int len = 0;
+    netinfo_type *net = bdb_state->repinfo->netinfo;
+    const char *to = bdb_state->repinfo->master_host;
+    int rc = net_send_message_payload_ack(net, to, USER_TYPE_CLUSTER_LSN, NULL,
+                                          0, &buf, &len, 1, 1000);
+    if (rc) {
+        return rc;
+    }
+    if (len != sizeof(DB_LSN)) {
+        free(buf);
+        return -1;
+    }
+    DB_LSN *lsn = (DB_LSN *)buf;
+    *file = ntohl(lsn->file);
+    *offset = ntohl(lsn->offset);
+    free(buf);
+    return 0;
+}
 
+void handle_cluster_lsn_req(void *ack_handle, void *usr_ptr, char *from_host,
+                            int usertype, void *dta, int dtalen, uint8_t is_tcp)
+{
+    bdb_state_type *bdb_state = usr_ptr;
+    uint32_t file, offset;
+    bdb_get_cluster_lsn(bdb_state, &file, &offset);
+    DB_LSN lsn = {.file = htonl(file), .offset = htonl(offset)};
+    net_ack_message_payload(ack_handle, 0, &lsn, sizeof(lsn));
+}
