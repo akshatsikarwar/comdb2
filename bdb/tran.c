@@ -1472,10 +1472,8 @@ static int bdb_tran_commit_with_seqnum_int_int(
     uint32_t generation = 0;
     tran_type *physical_tran = NULL;
     DB_LSN lsn;
-    DB_LSN old_lsn;
 
     bzero(&lsn, sizeof(DB_LSN));
-    bzero(&old_lsn, sizeof(DB_LSN));
 
     if (seqnum)
         bzero(seqnum, sizeof(seqnum_type));
@@ -1603,27 +1601,7 @@ static int bdb_tran_commit_with_seqnum_int_int(
             goto cleanup;
         } else {
             /* successful physical commit, lets increment our seqnum */
-            Pthread_mutex_lock(&(bdb_state->seqnum_info->lock));
-            /* dont let our global lsn go backwards */
-            memcpy(&old_lsn,
-                   &(bdb_state->seqnum_info
-                         ->seqnums[nodeix(bdb_state->repinfo->myhost)]),
-                   sizeof(DB_LSN));
-
-            if (log_compare(&lsn, &old_lsn) > 0) {
-                /*fprintf(stderr, "%s:%d 2 updating my seqnum to %d:%d\n",
-                  __func__, __LINE__, lsn.file, lsn.offset);*/
-
-                // TODO not sure if this is necessary anymore 
-                // I should be setting this from a hook in log-put
-                memcpy(&(bdb_state->seqnum_info
-                             ->seqnums[nodeix(bdb_state->repinfo->myhost)]),
-                       &lsn, sizeof(DB_LSN));
-                bdb_state->seqnum_info
-                    ->seqnums[nodeix(bdb_state->repinfo->myhost)]
-                    .generation = generation;
-            }
-            Pthread_mutex_unlock(&(bdb_state->seqnum_info->lock));
+            bdb_set_my_lsn(bdb_state, &lsn, generation);
         }
 
         /* Set the 'committed-child' flag if this is not the parent. */
@@ -1875,24 +1853,7 @@ static int bdb_tran_commit_with_seqnum_int_int(
             seqnum->generation = generation;
             set_seqnum = 1;
 
-            Pthread_mutex_lock(&(bdb_state->seqnum_info->lock));
-            /* dont let our global lsn go backwards */
-            memcpy(&old_lsn,
-                   &(bdb_state->seqnum_info
-                         ->seqnums[nodeix(bdb_state->repinfo->myhost)]),
-                   sizeof(DB_LSN));
-
-            if (log_compare(&lsn, &old_lsn) > 0) {
-                /*fprintf(stderr, "%s:%d 2 updating my seqnum to %d:%d\n",
-                  __func__, __LINE__, lsn.file, lsn.offset);*/
-                memcpy(&(bdb_state->seqnum_info
-                             ->seqnums[nodeix(bdb_state->repinfo->myhost)]),
-                       &lsn, sizeof(DB_LSN));
-                bdb_state->seqnum_info
-                    ->seqnums[nodeix(bdb_state->repinfo->myhost)]
-                    .generation = generation;
-            }
-            Pthread_mutex_unlock(&(bdb_state->seqnum_info->lock));
+            bdb_set_my_lsn(bdb_state, &lsn, generation);
         }
 
         break;
@@ -2677,6 +2638,23 @@ int bdb_set_tran_lowpri(bdb_state_type *bdb_state, tran_type *tran)
 {
     return bdb_state->dbenv->set_tran_lowpri(bdb_state->dbenv,
                                              tran->tid->txnid);
+}
+
+void bdb_set_my_lsn(bdb_state_type *bdb_state, DB_LSN *commit_lsn,
+                           uint32_t generation)
+{
+    seqnum_type *seqnum =
+        &bdb_state->seqnum_info->seqnums[nodeix(bdb_state->repinfo->myhost)];
+    DB_LSN *lsn = &seqnum->lsn;
+    Pthread_mutex_lock(&(bdb_state->seqnum_info->lock));
+    /* dont let our global lsn go backwards */
+    if (log_compare(commit_lsn, lsn) > 0) {
+        // TODO not sure if this is necessary anymore
+        // I should be setting this from a hook in log-put
+        *lsn = *commit_lsn;
+        seqnum->generation = generation;
+    }
+    Pthread_mutex_unlock(&(bdb_state->seqnum_info->lock));
 }
 
 void bdb_set_cluster_lsn(bdb_state_type *bdb_state, seqnum_type *commit)

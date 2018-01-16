@@ -1873,5 +1873,6 @@ const char *deadlock_policy_str(u_int32_t policy);
 int deadlock_policy_max();
 
 NETFP handle_cluster_lsn_req;
+void bdb_set_my_lsn(bdb_state_type *, DB_LSN *, uint32_t generation);
 
 #endif /* __bdb_int_h__ */
