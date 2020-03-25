@@ -225,6 +225,7 @@ __log_put_int_int(dbenv, lsnp, contextp, udbt, flags, off_context, usr_ptr)
 		} else
 			t.data = alloca(t.size);
 
+        printf("%s %p->%p\n", __func__, udbt->data, t.data);
 		memcpy(t.data, udbt->data, udbt->size);
 
         if (adjsize) {
@@ -389,6 +390,7 @@ panic_check:	/*
 err:
 	if (lock_held)
 		R_UNLOCK(dbenv, &dblp->reginfo);
+    printf("%s freeing:%p\n", __func__, dbt->data);
 	if (need_free)
 		__os_free(dbenv, dbt->data);
 

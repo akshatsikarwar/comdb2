@@ -438,7 +438,6 @@ function log_function() {
 		printf("is_durable, ") >> CFILE;
 	}
 	printf("ret;\n") >> CFILE;
-	printf("\tint used_malloc = 0;\n\n") >> CFILE;
 
 	printf("#ifdef %s_DEBUG\n", prefix) >> CFILE;
 	printf("\tfprintf(stderr,\"%s_log: begin\\n\");\n", funcname) >> CFILE;
@@ -500,37 +499,15 @@ function log_function() {
 		printf("\t\tlogrec.size += npad;\n\t}\n\n") >> CFILE
 
 		printf("\tif (!is_durable && txnid != NULL) {\n") >> CFILE;
-		write_malloc("\t\t",
-		    "lr", "logrec.size + sizeof(DB_TXNLOGREC)", CFILE)
-		printf("#ifdef DIAGNOSTIC\n") >> CFILE;
-		printf("\t\tgoto do_malloc;\n") >> CFILE;
-		printf("#else\n") >> CFILE;
+		write_malloc("\t\t", "lr", "logrec.size + sizeof(DB_TXNLOGREC)", CFILE)
 		printf("\t\tlogrec.data = &lr->data;\n") >> CFILE;
-		printf("#endif\n") >> CFILE;
 		printf("\t} else {\n") >> CFILE;
-		printf("#ifdef DIAGNOSTIC\n") >> CFILE;
-		printf("do_malloc:\n") >> CFILE;
-		printf("#endif\n") >> CFILE;
-		printf("\t\tif (logrec.size > 4096) {\n") >> CFILE;
-
-		printf("\t\t\tif ((ret =\n\t\t\t    __os_malloc(dbenv, ") >> CFILE;
-		printf("logrec.size, &logrec.data)) != 0) {\n") >> CFILE;
-		printf("#ifdef DIAGNOSTIC\n") >> CFILE;
-		printf("\t\t\t\tif (!is_durable && txnid != NULL)\n") >> CFILE;
-		printf("\t\t\t\t\t(void)__os_free(dbenv, lr);\n") >> CFILE;
-		printf("#endif\n") >> CFILE;
-		printf("\t\t\t\treturn (ret);\n") >> CFILE;
-
-		printf("\t\t\t}\n") >> CFILE;
-		printf("\t\t\tused_malloc = 1;\n") >> CFILE;
-		printf("\t\t} else {\n") >> CFILE;
-
-		printf("\t\t\tused_malloc = 0;\n") >> CFILE;
-		printf("\t\t\tlogrec.data = alloca(logrec.size);\n") >> CFILE;
-		printf("\t\t}\n") >> CFILE;
+		write_malloc("\t\t", "logrec.data", "logrec.size", CFILE)
 		printf("\t}\n") >> CFILE;
-	} else
-		write_cond_malloc("\t", "logrec.data", "logrec.size", CFILE)
+	} else {
+		write_malloc("\t", "logrec.data", "logrec.size", CFILE)
+    }
+    printf("\n\tprintf(\"%%s:mallocd:%%p\\n\", __func__, logrec.data);\n\n") >> CFILE;
 
 	printf("\tif (npad > 0)\n") >> CFILE;
 	printf("\t\tmemset((u_int8_t *)logrec.data + logrec.size ") >> CFILE;
@@ -638,36 +615,13 @@ function log_function() {
 	# the function), so we have to copy the log record to make sure the
 	# alignment is correct.
 	if (dbprivate) {
-		# Add the debug bit if we are logging a ND record.
-		printf("#ifdef DIAGNOSTIC\n") >> CFILE;
-		printf("\tif (!is_durable && txnid != NULL) {\n") >> CFILE;
-		printf("\t\t /*\n") >> CFILE;
-		printf("\t\t * We set the debug bit if we are going\n") \
-		    >> CFILE;
-		printf("\t\t * to log non-durable transactions so\n") >> CFILE;
-		printf("\t\t * they will be ignored by recovery.\n") >> CFILE;
-		printf("\t\t */\n") >> CFILE;
-		printf("\t\tmemcpy(lr->data, logrec.data, logrec.size);\n") \
-		    >> CFILE;
-		printf("\t\trectype |= DB_debug_FLAG;\n") >> CFILE;
-		printf("\t\tLOGCOPY_32(logrec.data, &rectype);\n")\
-		    >> CFILE;
-		printf("\t}\n") >> CFILE;
-		printf("#endif\n\n") >> CFILE;
-
 		# Add an ND record to the list.
 		printf("\tif (!is_durable && txnid != NULL) {\n") >> CFILE;
 		printf("\t\tret = 0;\n") >> CFILE;
 		printf("\t\tSTAILQ_INSERT_HEAD(&txnid") >> CFILE;
 		printf("->logs, lr, links);\n") >> CFILE;
-		printf("#ifdef DIAGNOSTIC\n") >> CFILE;
-		printf("\t\tgoto do_put;\n") >> CFILE;
-		printf("#endif\n") >> CFILE;
 		# Output the log record.
 		printf("\t} else {\n") >> CFILE;
-		printf("#ifdef DIAGNOSTIC\n") >> CFILE;
-		printf("do_put:\n") >> CFILE;
-		printf("#endif\n") >> CFILE;
 		printf("\t\tret = __log_put(dbenv,\n") >> CFILE;
 		printf("\t\t    ret_lsnp, (DBT *)&logrec, ") >> CFILE;
 		printf("flags | DB_LOG_NOCOPY);\n") >> CFILE;
@@ -687,23 +641,9 @@ function log_function() {
 		printf("\t\ttxnid->last_lsn = *ret_lsnp;\n\n") >> CFILE;
 	}
 
-	# If out of disk space log writes may fail.  If we are debugging
-	# that print out which records did not make it to disk.
-	printf("#ifdef LOG_DIAGNOSTIC\n") >> CFILE
-	printf("\tif (ret != 0)\n") >> CFILE;
-	printf("\t\t(void)%s_print(dbenv,\n", funcname) >> CFILE;
-	printf("\t\t    (DBT *)&logrec, ret_lsnp, (db_recops)0 , NULL);\n") >> CFILE
-	printf("#endif\n\n") >> CFILE
-
 	# Free and return
-	if (dbprivate) {
-		printf("#ifndef DIAGNOSTIC\n") >> CFILE
-		printf("\tif (is_durable || txnid == NULL)\n") >> CFILE;
-		printf("#endif\n") >> CFILE
-		write_cond_free("\t\t", "logrec.data", CFILE)
-	} else {
-		write_free("\t", "logrec.data", CFILE)
-	}
+    printf("\n\tprintf(\"%%s:freeing:%%p\\n\", __func__, logrec.data);\n\n") >> CFILE;
+    write_free("\t", "logrec.data", CFILE)
 	printf("\treturn (ret);\n}\n\n") >> CFILE;
 }
 

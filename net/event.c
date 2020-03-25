@@ -51,6 +51,62 @@
 #include <plhash.h>
 #include <portmuxapi.h>
 
+
+
+
+
+
+
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdatomic.h>
+
+#ifdef __STDC_NO_ATOMICS__
+#error "no atomics"
+#endif
+
+#define ref_malloc(x)                                                          \
+    ({                                                                         \
+        void *ptr = NULL;                                                      \
+        struct ref_malloc_struct {                                             \
+            atomic_int_fast64_t ref;                                           \
+            char mem[x];                                                       \
+        };                                                                     \
+        struct ref_malloc_struct *m = malloc(sizeof(*m));                      \
+        if (m) {                                                               \
+            m->ref = 1;                                                        \
+            ptr = m->mem;                                                      \
+        }                                                                      \
+        ptr;                                                                   \
+    })
+
+#define to_ref(x)                                                              \
+    ({                                                                         \
+        atomic_int_fast64_t *ref = (atomic_int_fast64_t *)x;                   \
+        --ref;                                                                 \
+        ref;                                                                   \
+    })
+
+#define ref_add(x)                                                             \
+    do {                                                                       \
+        atomic_int_fast64_t *ref = to_ref(x);                                  \
+        atomic_fetch_add(ref, 1);                                              \
+    } while (0)
+
+#define ref_free(x)                                                            \
+    do {                                                                       \
+        atomic_int_fast64_t *ref = to_ref(x);                                  \
+        intptr_t r = atomic_fetch_sub(ref, 1);                                 \
+        if (r == 1) {                                                          \
+            free(ref);                                                         \
+        }                                                                      \
+    } while (0)
+
+
+
+
+
+
 #define MB(x) ((x) * 1024 * 1024)
 #define TCP_BUFSZ MB(8)
 #define DISTRESS_COUNT 5
@@ -688,43 +744,33 @@ static void event_info_free(struct event_info *e)
 
 struct net_msg_data {
     int sz;
-    uint32_t ref;
     net_send_message_header msghdr;
     uint8_t buf[0];
 };
 
 static struct net_msg_data *net_msg_data_new(void *buf, int len, int type)
 {
-    struct net_msg_data *data = malloc(sizeof(struct net_msg_data) + len);
+    struct net_msg_data *data = ref_malloc(sizeof(struct net_msg_data) + len);
     if (data == NULL) {
         return NULL;
     }
     memset(data, 0, sizeof(struct net_msg_data));
     data->sz = NET_SEND_MESSAGE_HEADER_LEN + len;
-    data->ref = 1;
     net_send_message_header tmp = {
         .usertype = type,
         .datalen = len,
     };
     net_send_message_header *hdr = &data->msghdr;
     net_send_message_header_put(&tmp, (uint8_t *)hdr, (uint8_t*)(hdr + 1));
+
+    printf("ref send buf:%p\n", buf);
     memcpy(&data->buf, buf, len);
     return data;
 }
 
-static void net_msg_data_free(const void *unused, size_t datalen, void *extra)
+static void net_msg_data_free(const void *unused, size_t datalen, void *data)
 {
-    struct net_msg_data *data = extra;
-    int ref = ATOMIC_ADD32(data->ref, -1);
-    if (ref) {
-        return;
-    }
-    free(data);
-}
-
-static void net_msg_data_add_ref(struct net_msg_data *data)
-{
-    ATOMIC_ADD32(data->ref, 1);
+    ref_free(data);
 }
 
 struct net_msg {
@@ -2628,6 +2674,7 @@ static void net_send_memcpy(struct event_info *e, int sz, int n, void **buf, int
         hdr.datalen = len[i];
         b = memcpy(b, e->wirehdr[WIRE_HEADER_USER_MSG], e->wirehdr_len) + e->wirehdr_len;
         b = net_send_message_header_put(&hdr, b, b + sizeof(net_send_message_header));
+        printf("small send buf:%p\n", buf[i]);
         b = memcpy(b, buf[i], len[i]) + len[i];
     }
     evbuffer_commit_space(e->wr_buf, v, 1);
@@ -2646,7 +2693,7 @@ static void net_send_addref(struct event_info *e, struct net_msg *msg)
         if (rc) break;
         rc = evbuffer_add_reference(buf, &data->msghdr, data->sz, net_msg_data_free, data);
         if (rc) break;
-        net_msg_data_add_ref(data);
+        ref_add(data);
     }
     if (rc != 0) {
         hprintf("Failed to add ref #msgs:%d rc:%d\n", msg->num, rc);

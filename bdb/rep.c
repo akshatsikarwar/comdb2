@@ -972,12 +972,14 @@ int berkdb_send_rtn(DB_ENV *dbenv, const DBT *control, const DBT *rec,
                 logmsg(LOGMSG_ERROR, "SENDING context -1 to all nodes\n");
                 cheap_stack_trace();
             }
+            printf("%s ptr:%p\n", __func__, &gblcontext);
             data[num] = &gblcontext;
             sz[num] = sizeof(gblcontext);
             type[num] = USER_TYPE_GBLCONTEXT;
             flag[num] = 0;
             ++num;
         }
+        printf("%s ptr:%p\n", __func__, buf);
         data[num] = buf;
         sz[num] = bufsz;
         type[num] = USER_TYPE_BERKDB_REP;

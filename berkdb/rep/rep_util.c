@@ -239,6 +239,7 @@ __rep_send_message(dbenv, eid, rtype, lsnp, dbtp, flags, usr_ptr)
 		myflags |= DB_REP_TRACE;
 	}
 
+    printf("%s rep-sending:%p userPtr:%p\n", __func__, dbtp->data, usr_ptr);
 	ret = dbenv->rep_send(dbenv, &cdbt, dbtp, &cntrl.lsn, eid, myflags,
 		usr_ptr);
 
