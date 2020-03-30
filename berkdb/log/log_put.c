@@ -214,12 +214,12 @@ __log_put_int_int(dbenv, lsnp, contextp, udbt, flags, off_context, usr_ptr)
 	 * so that we retain an unencrypted copy of the log record to send
 	 * to clients.
 	 */
-	if (!LF_ISSET(DB_LOG_NOCOPY) || IS_REP_MASTER(dbenv)) {
+	if (!LF_ISSET(DB_LOG_NOCOPY) ||
+	    (IS_REP_MASTER(dbenv) && CRYPTO_ON(dbenv))) {
 		if (CRYPTO_ON(dbenv)) {
 			adjsize = db_cipher->adj_size(udbt->size);
 			t.size += adjsize;
 		}
-
 		if (t.size > 4096) {
 			if ((ret = __os_calloc(dbenv, 1, t.size, &t.data)) != 0)
 				goto err;
