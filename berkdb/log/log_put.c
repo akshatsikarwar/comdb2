@@ -176,7 +176,7 @@ __log_put_int_int(dbenv, lsnp, contextp, udbt, flags, off_context, usr_ptr)
 	dbt = &t;
 	t = *udbt;
 	u_int8_t *pp;
-    int adjsize = 0;
+	int adjsize = 0;
 
 	lock_held = need_free = 0;
 	flags &= (~(DB_LOG_DONT_LOCK | DB_LOG_DONT_INFLATE));
@@ -186,18 +186,20 @@ __log_put_int_int(dbenv, lsnp, contextp, udbt, flags, off_context, usr_ptr)
 		LOGCOPY_32(&rectype, pp);
 	}
 
-    /* prevent local replicant from generating logs */
-    if (gbl_is_physical_replicant)
-    {
-        logmsg(LOGMSG_FATAL, "%s line %d invalid logput for physical "
-               "replicant\n", __func__, __LINE__);
-        abort();
-    }
+	/* prevent local replicant from generating logs */
+	if (gbl_is_physical_replicant) {
+		logmsg(LOGMSG_FATAL,
+		       "%s line %d invalid logput for physical "
+		       "replicant\n",
+		       __func__, __LINE__);
+		abort();
+	}
 
 	if (!IS_REP_MASTER(dbenv) && !(dblp->flags & DBLOG_RECOVER)) {
 
 		if (dbenv->attr.warn_on_replicant_log_write)
-			logmsg(LOGMSG_USER, "not master and not in recovery - I shouldn't be writing logs!!!\n");
+			logmsg(LOGMSG_USER, "not master and not in recovery - "
+					    "I shouldn't be writing logs!!!\n");
 		if (dbenv->attr.abort_on_replicant_log_write)
 			abort();
 	}
@@ -214,9 +216,9 @@ __log_put_int_int(dbenv, lsnp, contextp, udbt, flags, off_context, usr_ptr)
 	 */
 	if (!LF_ISSET(DB_LOG_NOCOPY) || IS_REP_MASTER(dbenv)) {
 		if (CRYPTO_ON(dbenv)) {
-            adjsize = db_cipher->adj_size(udbt->size);
+			adjsize = db_cipher->adj_size(udbt->size);
 			t.size += adjsize;
-        }
+		}
 
 		if (t.size > 4096) {
 			if ((ret = __os_calloc(dbenv, 1, t.size, &t.data)) != 0)
@@ -227,51 +229,51 @@ __log_put_int_int(dbenv, lsnp, contextp, udbt, flags, off_context, usr_ptr)
 
 		memcpy(t.data, udbt->data, udbt->size);
 
-        if (adjsize) {
-            assert(adjsize < 16);
-            uint8_t *pad = (uint8_t*) t.data + (t.size - adjsize);
-            for (int i = 0; i < adjsize; i++)
-                pad[i] = adjsize;
-        }
+		if (adjsize) {
+			assert(adjsize < 16);
+			uint8_t *pad = (uint8_t *)t.data + (t.size - adjsize);
+			for (int i = 0; i < adjsize; i++)
+				pad[i] = adjsize;
+		}
 	}
 	unsigned long long ltranid = 0;
 	if (10006 == rectype) {
-		/* Find the logical tranid.  Offset should be (rectype + txn_num + last_lsn) */
+		/* Find the logical tranid.  Offset should be (rectype + txn_num
+		 * + last_lsn) */
 		ltranid = *(unsigned long long *)(&pp[4 + 4 + 8]);
 	}
 
-    /* try to do this before grabbing the region lock */
-    if (!(off_context >= 0 && IS_REP_MASTER(dbenv))) {
-        if ((ret = __log_encrypt_record(dbenv, dbt, &hdr, udbt->size)) != 0)
-            goto err;
-        if (CRYPTO_ON(dbenv))
-            key = db_cipher->mac_key;
-        else
-            key = NULL;
-        __db_chksum(dbt->data, dbt->size, key, hdr.chksum);
-    } else {
-        if (CRYPTO_ON(dbenv)) {
-            hdr.size = HDR_CRYPTO_SZ;
-            hdr.orig_size = udbt->size;
-        } else {
-            hdr.size = HDR_NORMAL_SZ;
-        }
-    }
-
+	/* try to do this before grabbing the region lock */
+	if (!(off_context >= 0 && IS_REP_MASTER(dbenv))) {
+		if ((ret = __log_encrypt_record(dbenv, dbt, &hdr,
+						udbt->size)) != 0)
+			goto err;
+		if (CRYPTO_ON(dbenv))
+			key = db_cipher->mac_key;
+		else
+			key = NULL;
+		__db_chksum(dbt->data, dbt->size, key, hdr.chksum);
+	} else {
+		if (CRYPTO_ON(dbenv)) {
+			hdr.size = HDR_CRYPTO_SZ;
+			hdr.orig_size = udbt->size;
+		} else {
+			hdr.size = HDR_NORMAL_SZ;
+		}
+	}
 
 	R_LOCK(dbenv, &dblp->reginfo);
 	lock_held = 1;
 
 	ZERO_LSN(old_lsn);
 
-    Pthread_mutex_lock(&gbl_logput_lk);
-	if ((ret =
-		__log_put_next(dbenv, lsnp, contextp, dbt, udbt, &hdr, &old_lsn,
-		    off_context, key, flags)) != 0)
+	Pthread_mutex_lock(&gbl_logput_lk);
+	if ((ret = __log_put_next(dbenv, lsnp, contextp, dbt, udbt, &hdr,
+				  &old_lsn, off_context, key, flags)) != 0)
 		goto panic_check;
 
-    Pthread_cond_broadcast(&gbl_logput_cond);
-    Pthread_mutex_unlock(&gbl_logput_lk);
+	Pthread_cond_broadcast(&gbl_logput_cond);
+	Pthread_mutex_unlock(&gbl_logput_lk);
 
 	lsn = *lsnp;
 
@@ -295,8 +297,8 @@ __log_put_int_int(dbenv, lsnp, contextp, udbt, flags, off_context, usr_ptr)
 		 */
 		if (dbenv->rep_send == NULL) {
 			__db_err(dbenv, "%s %s",
-			    "Non-replication DB_ENV handle attempting",
-			    "to modify a replicated environment");
+				 "Non-replication DB_ENV handle attempting",
+				 "to modify a replicated environment");
 			ret = EINVAL;
 			goto err;
 		}
@@ -312,9 +314,9 @@ __log_put_int_int(dbenv, lsnp, contextp, udbt, flags, off_context, usr_ptr)
 		 * we don't just want to return failure.
 		 */
 		if (!IS_ZERO_LSN(old_lsn))
-			(void)__rep_send_message(dbenv,
-			    db_eid_broadcast, REP_NEWFILE, &old_lsn, NULL, 0,
-			    usr_ptr);
+			(void)__rep_send_message(dbenv, db_eid_broadcast,
+						 REP_NEWFILE, &old_lsn, NULL, 0,
+						 usr_ptr);
 
 		/*
 		 * Then send the log record itself on to our clients.
@@ -343,10 +345,10 @@ __log_put_int_int(dbenv, lsnp, contextp, udbt, flags, off_context, usr_ptr)
 		 * throttled; we revert to REP_LOG in the same routine
 		 * before sending the message
 		 */
-		if ((__rep_send_message(dbenv,
-			    db_eid_broadcast, REP_LOG_LOGPUT, &lsn, udbt, flags,
-			    usr_ptr) != 0) && LF_ISSET(DB_LOG_PERM))
-			 LF_SET(DB_FLUSH);
+		if ((__rep_send_message(dbenv, db_eid_broadcast, REP_LOG_LOGPUT,
+					&lsn, udbt, flags, usr_ptr) != 0) &&
+		    LF_ISSET(DB_LOG_PERM))
+			LF_SET(DB_FLUSH);
 	}
 
 	/*
@@ -376,13 +378,12 @@ __log_put_int_int(dbenv, lsnp, contextp, udbt, flags, off_context, usr_ptr)
 		lp->stat.st_wc_bytes = lp->stat.st_wc_mbytes = 0;
 
 	if (0) {
-panic_check:	/*
-		 * Writing log records cannot fail if we're a replication
+panic_check:
+		/* Writing log records cannot fail if we're a replication
 		 * master.  The reason is that once we send the record to
-		 * replication clients, the transaction can no longer
-		 * abort, otherwise the master would be out of sync with
-		 * the rest of the replication group.  Panic the system.
-		 */
+		 * replication clients, the transaction can no longer abort,
+		 * otherwise the master would be out of sync with the rest of
+		 * the replication group.  Panic the system.  */
 		if (ret != 0 && IS_REP_MASTER(dbenv))
 			ret = __db_panic(dbenv, ret);
 	}
@@ -392,10 +393,10 @@ err:
 	if (need_free)
 		__os_free(dbenv, dbt->data);
 
-	if (IS_REP_MASTER(dbenv) && is_commit_record(rectype) && 
-			(delay = bdb_commitdelay(dbenv->app_private))) {
+	if (IS_REP_MASTER(dbenv) && is_commit_record(rectype) &&
+	    (delay = bdb_commitdelay(dbenv->app_private))) {
 		static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;
-		static unsigned long long count=0;
+		static unsigned long long count = 0;
 		static int lastpr = 0;
 		int now;
 
@@ -404,9 +405,11 @@ err:
 		poll(NULL, 0, delay);
 		Pthread_mutex_unlock(&lk);
 		count++;
-		if (gbl_commit_delay_trace && (now = time(NULL))-lastpr) {
-			logmsg(LOGMSG_USER, "%s line %d commit-delayed for %d ms, %llu "
-					"total-delays\n", __func__, __LINE__, delay, count);
+		if (gbl_commit_delay_trace && (now = time(NULL)) - lastpr) {
+			logmsg(LOGMSG_USER,
+			       "%s line %d commit-delayed for %d ms, %llu "
+			       "total-delays\n",
+			       __func__, __LINE__, delay, count);
 			lastpr = now;
 		}
 	}
@@ -415,8 +418,8 @@ err:
 	 * If auto-remove is set and we switched files, remove unnecessary
 	 * log files.
 	 */
-	if (ret == 0 &&
-	    F_ISSET(dbenv, DB_ENV_LOG_AUTOREMOVE) && !IS_ZERO_LSN(old_lsn))
+	if (ret == 0 && F_ISSET(dbenv, DB_ENV_LOG_AUTOREMOVE) &&
+	    !IS_ZERO_LSN(old_lsn))
 		__log_autoremove(dbenv);
 
 	return (ret);
