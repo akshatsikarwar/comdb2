@@ -369,6 +369,14 @@ proc do_cdb2_defquery { sql {format csv} {costVarName ""} } {
 
 proc do_cdb2_query { dbName sql {tier default} {format csv} {costVarName ""} } {
     if {[string index $sql 0] eq "#"} {return}
+    if {[string compare -length 2 $sql "--"] eq 0} {return}
+
+    set first [string first "/*" $sql]
+    set last0 [string last "*/" $sql]
+    set len [string length $sql]
+    set last1 [expr $len - 2]
+    if {$first == 0 && $last0 == $last1} {return}
+
     maybe_append_query_to_log_file $sql $dbName $tier
     set doCost [expr {[string length $costVarName] > 0}]
 
@@ -1145,11 +1153,12 @@ proc create_table {origquery} {
   }
 
   #CREATE TABLE t(a,b)
-  set found [regexp -nocase {^CREATE TABLE ([[:alnum:]]+).*\((.+)\)$} $origquery _ table query]
+  set found [regexp -nocase {^CREATE TABLE ([[:alnum:]]+)(.*)$} $origquery _ table query]
   if {$found == 0} {
     puts "Can't process: \"$origquery\""
     return
   }
+  set query [string trim $query " ;()"]
   set fields [split $query ","]
 
   set csc2name [get_csc2_file_name $table]
@@ -1162,10 +1171,13 @@ proc create_table {origquery} {
   set unique [list]
   foreach field $fields {
     set field [string trim $field]
-    set field [split $field " "]
+    set field [split $field " ("]
+    set field [string trim $field ")"]
 
     set name [lindex $field 0]
     set type [lindex $field 1]
+    set len  [lindex $field 2]
+    set found_len [string is integer -strict $len]
 
     set strlen ""
     set dbstore ""
@@ -1173,6 +1185,14 @@ proc create_table {origquery} {
     switch [string toupper $type] {
       "" {
         set type "int"
+        if {$name == "json"} {
+          set type "cstring"
+          set strlen "\[2048\]"
+        }
+      }
+      "JSON" {
+        set type "cstring"
+        set strlen "\[2048\]"
       }
       "INTEGER" {
         set type "int"
@@ -1182,7 +1202,10 @@ proc create_table {origquery} {
       }
       "TEXT" {
         set type "cstring"
-        set strlen "\[64\]"
+        set strlen "\[512\]"
+        if {$found_len == 1} {
+          set strlen [string cat "\[" ${len} "\]"]
+        }
       }
       "BLOB" {
         set type "blob"
