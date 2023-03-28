@@ -6890,7 +6890,7 @@ int get_data(BtCursor *pCur, struct schema *sc, uint8_t *in, int fnum, Mem *m,
         m->u.r = dval;
         if (rc == -1)
             goto done;
-        if (null)
+        if (null || isnan(m->u.r))
             m->flags = MEM_Null;
         else
             m->flags = MEM_Real;
