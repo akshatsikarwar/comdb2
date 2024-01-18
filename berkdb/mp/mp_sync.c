@@ -215,16 +215,12 @@ void *mempsync_thd(void *p)
 {
 	int rc;
 	DB_LOGC *logc;
-	void *bdb_state;
 	DBT data_dbt;
 	DB_LSN lsn, sync_lsn;
 	DB_ENV *dbenv = p;
 	int rep_check = 0;
 
-	/* slightly kludgy, but necessary since this code gets
-	 * called in recovery */
-	bdb_state = dbenv->app_private;
-	bdb_set_key(bdb_state);
+	struct bdb_state_tag *bdb_state = gbl_bdb_state;
 	bdb_thread_event(bdb_state, BDBTHR_EVENT_START_RDONLY);
 	thrman_register(THRTYPE_GENERIC);
 	thread_started("mempsync");

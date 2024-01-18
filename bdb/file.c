@@ -5508,9 +5508,6 @@ extern pthread_key_t lockmgr_key;
 static void run_once(void)
 {
     Pthread_key_create(&lockmgr_key, NULL);
-
-    Pthread_key_create(&bdb_key, NULL);
-
     Pthread_key_create(&lock_key, bdb_lock_destructor);
 }
 
@@ -5915,7 +5912,7 @@ static bdb_state_type *bdb_open_int(
 
         Pthread_mutex_init(&(bdb_state->repinfo->appseqnum_lock), NULL);
 
-        bdb_set_key(bdb_state);
+        gbl_bdb_state = bdb_state;
 
         /* create a blkseq db before we open the main environment,
          * since recovery routines will expect it to exist */

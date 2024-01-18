@@ -46,8 +46,6 @@ int bdb_the_lock_desired(void);
 #define BDB_TRYREADLOCK(idstr) bdb_get_readlock(bdb_state, 1, (idstr), __func__, __LINE__)
 #define BDB_RELLOCK() bdb_rellock(bdb_state, __func__, __LINE__)
 
-void bdb_set_key(struct bdb_state_tag *);
-
 /*
  * Backend thread event constants.
  */
