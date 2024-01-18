@@ -71,14 +71,12 @@ void print(bdb_state_type *bdb_state, char *format, ...)
     va_end(ap);
 }
 
-extern bdb_state_type *gbl_bdb_state;
-
 void bdb_set_key(bdb_state_type *bdb_state)
 {
     if (gbl_bdb_state)
         return;
 
-    /* if we were passed a child, find his parent */
+    /* if we were passed a child, find it's parent */
     if (bdb_state->parent)
         bdb_state = bdb_state->parent;
 

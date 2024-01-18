@@ -33,9 +33,6 @@
 #include "locks_wrap.h"
 #include "logmsg.h"
 
-/* XXX stupid chicken/egg.  this variable cannot live in the bdb_state
-   cause it needs to get set before we have a bdb_state */
-extern bdb_state_type *gbl_bdb_state;
 extern int gbl_rowlocks;
 extern pthread_t gbl_invalid_tid;
 extern int gbl_exit;
@@ -488,8 +485,7 @@ void bdb_get_writelock_abort_waiters(bdb_state_type *bdb_state,
  * simultaneously.  If a thread acquires the read lock twice it is reference
  * counted.  If a thread that holds the write lock calls this then it
  * continues to hold the write lock but with a higher reference count. */
-void bdb_get_readlock(bdb_state_type *bdb_state, const char *idstr,
-                      const char *funcname, int line)
+void bdb_get_readlock(bdb_state_type *bdb_state, int trylock, const char *idstr, const char *funcname, int line)
 {
     thread_lock_info_type *lk = pthread_getspecific(lock_key);
     bdb_state_type *lock_handle = bdb_state;
@@ -516,7 +512,7 @@ void bdb_get_readlock(bdb_state_type *bdb_state, const char *idstr,
         if (rc == EBUSY) {
             logmsg(LOGMSG_INFO, "trying readlock (%s %p), last writelock is %s %p\n", idstr, (void *)pthread_self(),
                    lock_handle->bdb_lock_write_idstr, (void *)lock_handle->bdb_lock_write_holder);
-
+            if (trylock) abort();
             Pthread_rwlock_rdlock(lock_handle->bdb_lock);
         } else if (rc != 0) {
             logmsg(LOGMSG_FATAL,
@@ -549,11 +545,6 @@ void bdb_get_readlock(bdb_state_type *bdb_state, const char *idstr,
         }
     }
     lk->lockref++;
-}
-
-void bdb_get_the_readlock(const char *idstr, const char *function, int line)
-{
-    bdb_get_readlock(gbl_bdb_state, idstr, function, line);
 }
 
 void bdb_assert_wrlock(bdb_state_type *bdb_state, const char *funcname,
@@ -631,7 +622,7 @@ void bdb_rellock(bdb_state_type *bdb_state, const char *funcname, int line)
                      lk->readlockref);
                */
             while (lk->readlockref > 0) {
-                bdb_get_readlock(bdb_state, lk->readident, funcname, line);
+                bdb_get_readlock(bdb_state, 0, lk->readident, funcname, line);
                 lk->readlockref--;
             }
             lk->readident = NULL;
@@ -640,11 +631,6 @@ void bdb_rellock(bdb_state_type *bdb_state, const char *funcname, int line)
         if (gbl_bdblock_debug)
             rel_lock_ref_log(bdb_state, lk->lockref);
     }
-}
-
-void bdb_relthelock(const char *funcname, int line)
-{
-    bdb_rellock(gbl_bdb_state, funcname, line);
 }
 
 /* Check that all the locks are released; this ensures that no
@@ -856,7 +842,7 @@ void bdb_stripe_done(bdb_state_type *bdb_state)
     return_threadid(parent, id);
 }
 
-void bdb_thread_event(bdb_state_type *bdb_state, int event)
+void bdb_thread_event(bdb_state_type *bdb_state, enum bdb_thr_event event)
 {
     bdb_state_type *parent;
 

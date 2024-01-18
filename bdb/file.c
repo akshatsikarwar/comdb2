@@ -1296,6 +1296,8 @@ int bdb_del_list_free(void *list, int *bdberr)
 
 */
 
+/* XXX stupid chicken/egg.  this variable cannot live in the bdb_state
+   cause it needs to get set before we have a bdb_state */
 bdb_state_type *gbl_bdb_state;
 
 char *bdb_trans(const char infile[], char outfile[])
