@@ -73,6 +73,7 @@ static void sql_disable_flush(struct sqlwriter *writer)
 
 static void sql_timeout_cb(int fd, short what, void *arg)
 {
+    printf("%s fd:%d\n", __func__, fd);
     struct sqlwriter *writer = arg;
     check_thd(writer->timer_thd);
     int rc = pthread_mutex_trylock(&writer->wr_lock);
@@ -87,6 +88,7 @@ static void sql_timeout_cb(int fd, short what, void *arg)
         maxquerytime_cb(writer->clnt);
         writer->do_timeout = 0;
         writer->timed_out = 1;
+        printf("%s: wrote timeout message - but still need to flush? fd:%d\n", __func__, fd);
     }
     Pthread_mutex_unlock(&writer->wr_lock);
 }
@@ -287,6 +289,7 @@ int sql_write(struct sqlwriter *writer, void *arg, int flush)
 {
     if (from_timeout_cb(writer)) { /* TODO FIXME : I don't like this special case */
         /* We're holding wr_lock from sql_timeout_cb() */
+        puts(__func__);
         return sql_pack_response(writer, arg);
     }
     Pthread_mutex_lock(&writer->wr_lock);
@@ -342,6 +345,7 @@ static int sql_pack_heartbeat(struct sqlwriter *writer)
 
 static void sql_trickle_int(struct sqlwriter *writer, int fd)
 {
+    printf("%s fd:%d\n", __func__, fd);
     if (!writer->wr_continue || writer->bad || writer->done) {
         sql_disable_heartbeat(writer);
         return;
@@ -355,6 +359,7 @@ static void sql_trickle_int(struct sqlwriter *writer, int fd)
         }
     }
     const int n = wr_evbuffer(writer, fd);
+    printf("%s wrote:%d fd:%d\n", __func__, n, fd);
     if (n <= 0) {
         writer->bad = 1;
         logmsg(LOGMSG_ERROR, "%s write failed fd:%d rc:%d err:%s\n", __func__,
@@ -367,6 +372,7 @@ static void sql_trickle_int(struct sqlwriter *writer, int fd)
 
 static void sql_trickle_cb(int fd, short what, void *arg)
 {
+    printf("%s fd:%d\n", __func__, fd);
     if (!(what & EV_WRITE)) {
         abort();
     }
@@ -379,6 +385,7 @@ static void sql_trickle_cb(int fd, short what, void *arg)
 
 static void sql_heartbeat_cb(int fd, short what, void *arg)
 {
+    printf("%s fd:%d\n", __func__, fd);
     struct sqlwriter *writer = arg;
     if (pthread_mutex_trylock(&writer->wr_lock) == 0) {
         int len = evbuffer_get_length(writer->wr_buf);

@@ -32,7 +32,7 @@ void bdb_get_writelock_abort_waiters(struct bdb_state_tag *, const char *idstr, 
  * simultaneously.  If a thread acquires the read lock twice it is reference
  * counted.  If a thread that holds the write lock calls this then it
  * continues to hold the write lock but with a higher reference count. */
-void bdb_get_readlock(struct bdb_state_tag *, int trylock, const char *idstr, const char *funcname, int line);
+int bdb_get_readlock(struct bdb_state_tag *, int trylock, const char *idstr, const char *funcname, int line);
 
 /* Release the lock of either type (decrements reference count, releases
  * actual lock if reference count hits zero). */
@@ -58,6 +58,7 @@ enum bdb_thr_event {
 
 void bdb_thread_event(struct bdb_state_tag *, enum bdb_thr_event);
 int bdb_am_i_coherent(struct bdb_state_tag *);
+int bdb_try_am_i_coherent(struct bdb_state_tag *);
 int bdb_is_open(struct bdb_state_tag *);
 
 #endif /* INCLUDED_BDBGLUE_H */

@@ -485,7 +485,7 @@ void bdb_get_writelock_abort_waiters(bdb_state_type *bdb_state,
  * simultaneously.  If a thread acquires the read lock twice it is reference
  * counted.  If a thread that holds the write lock calls this then it
  * continues to hold the write lock but with a higher reference count. */
-void bdb_get_readlock(bdb_state_type *bdb_state, int trylock, const char *idstr, const char *funcname, int line)
+int bdb_get_readlock(bdb_state_type *bdb_state, int trylock, const char *idstr, const char *funcname, int line)
 {
     thread_lock_info_type *lk = pthread_getspecific(lock_key);
     bdb_state_type *lock_handle = bdb_state;
@@ -495,8 +495,7 @@ void bdb_get_readlock(bdb_state_type *bdb_state, int trylock, const char *idstr,
         lock_handle = lock_handle->parent;
 
     if (lk == NULL) {
-        logmsg(LOGMSG_FATAL, "%s/%s(%s): bdb lock not inited in this thread\n",
-                idstr, funcname, __func__);
+        logmsg(LOGMSG_FATAL, "%s/%s(%s): bdb lock not inited in this thread\n", idstr, funcname, __func__);
         abort();
     }
 
@@ -507,16 +506,14 @@ void bdb_get_readlock(bdb_state_type *bdb_state, int trylock, const char *idstr,
             lk->initpri = 1;
         }
 #endif
-
         rc = pthread_rwlock_tryrdlock(lock_handle->bdb_lock);
         if (rc == EBUSY) {
             logmsg(LOGMSG_INFO, "trying readlock (%s %p), last writelock is %s %p\n", idstr, (void *)pthread_self(),
                    lock_handle->bdb_lock_write_idstr, (void *)lock_handle->bdb_lock_write_holder);
-            if (trylock) abort();
+            if (trylock) return rc;
             Pthread_rwlock_rdlock(lock_handle->bdb_lock);
         } else if (rc != 0) {
-            logmsg(LOGMSG_FATAL,
-                   "%s/%s(%s): pthread_rwlock_tryrdlock error %d %s\n", idstr,
+            logmsg(LOGMSG_FATAL, "%s/%s(%s): pthread_rwlock_tryrdlock error %d %s\n", idstr,
                    funcname, __func__, rc, strerror(rc));
             abort();
         }
@@ -545,6 +542,7 @@ void bdb_get_readlock(bdb_state_type *bdb_state, int trylock, const char *idstr,
         }
     }
     lk->lockref++;
+    return 0;
 }
 
 void bdb_assert_wrlock(bdb_state_type *bdb_state, const char *funcname,

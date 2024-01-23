@@ -112,6 +112,7 @@ static void free_newsql_appdata_evbuffer(int dummyfd, short what, void *arg)
     struct newsql_appdata_evbuffer *appdata = arg;
     struct sqlclntstate *clnt = &appdata->clnt;
     int fd = appdata->fd;
+    printf("%s ****** fd:%d\n", __func__, fd);
     rem_sql_evbuffer(clnt);
     rem_appsock_connection_evbuffer(clnt);
     if (appdata->dispatch) {
@@ -473,13 +474,13 @@ static int do_dispatch_sql(struct newsql_appdata_evbuffer *appdata)
     struct dispatch_sql_arg *d = appdata->dispatch;
     if (d->dispatched) return -1; /* already dispatched */
     if (--d->wait_time <= 0) return 0; /* timed out, dispatch now */
-    if (bdb_am_i_coherent(thedb->bdb_env)) return 0; /* am coherent, dispatch now */
+    if (bdb_try_am_i_coherent(thedb->bdb_env)) return 0; /* am coherent, dispatch now */
     if (!bdb_whoismaster(thedb->bdb_env)) return -1; /* still no master, wait more */
     if (leader_is_new()) {
         if (d->wait_time > gbl_new_leader_duration) {
+            logmsg(LOGMSG_USER, "%s: have leader, now waiting %ds (was %ds) for coherency lease fd:%d\n",
+                   __func__, gbl_new_leader_duration, d->wait_time, appdata->fd);
             d->wait_time = gbl_new_leader_duration;
-            logmsg(LOGMSG_USER, "%s: have leader, waiting %ds for coherency lease fd:%d\n",
-                   __func__, d->wait_time, appdata->fd);
         }
         return -1; /* wait a bit more to catch up */
     }
@@ -509,7 +510,7 @@ static void wait_for_leader(struct newsql_appdata_evbuffer *appdata, newsql_loop
     d->thd = pthread_self();
     d->ev = event_new(appdata->base, -1, EV_TIMEOUT | EV_PERSIST, dispatch_sql, appdata);
     Pthread_mutex_lock(&dispatch_lk);
-    if (bdb_am_i_coherent(thedb->bdb_env)) {
+    if (bdb_try_am_i_coherent(thedb->bdb_env)) {
         /* check again under lock to prevent race with concurrent leader-upgrade */
         Pthread_mutex_unlock(&dispatch_lk);
         event_free(d->ev);
@@ -572,6 +573,7 @@ read:   cdb2__query__free_unpacked(appdata->query, &pb_alloc);
     }
     sql_reset(appdata->writer);
     if (clnt->query_timeout) {
+        printf("DOING TIMEOUT !!!!!!!!!!\n");
         sql_enable_timeout(appdata->writer, clnt->query_timeout);
     }
     sql_enable_heartbeat(appdata->writer);
@@ -972,6 +974,7 @@ static int newsql_pack(struct sqlwriter *sqlwriter, void *data)
 static int newsql_write_evbuffer(struct sqlclntstate *clnt, int type, int state,
                                  const CDB2SQLRESPONSE *resp, int flush)
 {
+    puts(__func__);
     struct newsql_appdata_evbuffer *appdata = clnt->appdata;
     struct newsql_pack_arg arg = {0};
     arg.resp_len = resp ? cdb2__sqlresponse__get_packed_size(resp) : 0;
@@ -1025,6 +1028,7 @@ static int allow_admin(int local)
 
 static void newsql_setup_clnt_evbuffer(struct appsock_handler_arg *arg, int admin)
 {
+    printf("%s fd:%d\n", __func__, arg->fd);
     if (!dispatch_base) {
         dispatch_base = arg->base;
     }

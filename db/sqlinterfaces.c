@@ -7134,6 +7134,7 @@ void exhausted_appsock_connections(struct sqlclntstate *clnt)
 
 int maxquerytime_cb(struct sqlclntstate *clnt)
 {
+    puts(__func__);
     clnt->statement_timedout = 1;
     return write_response(clnt, RESPONSE_ERROR, (char *)sqlite3ErrStr(SQLITE_TIMEDOUT), CDB2ERR_QUERYLIMIT);
 }

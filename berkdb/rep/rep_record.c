@@ -6953,8 +6953,6 @@ __rep_cmp_vote2(dbenv, rep, eid, egen)
 	return (1);
 }
 
-int gbl_online_recovery_maxlocks = 0;
-
 static int
 recovery_getlocks(dbenv, lockid, lock_dbt, lsn)
 	DB_ENV *dbenv;
@@ -7015,7 +7013,6 @@ __rep_dorecovery(dbenv, lsnp, trunclsnp, online, undid_schema_change)
 	int schema_lk_count = 0;
 	int i_am_master = 0;
 	static int truncate_count = 0;
-	int maxlocks = gbl_online_recovery_maxlocks;
 	u_int32_t rectype;
 	u_int32_t keycnt = 0;
 	u_int32_t logflags = DB_LAST;
@@ -8251,6 +8248,15 @@ __rep_verify_match(dbenv, rp, savetime, online)
 	time_t savetime;
 	int online;
 {
+    static int count = 0;
+    extern const char *gbl_myhostname;
+    if (++count > 1 && strcmp(gbl_myhostname, "c2") == 0) {
+        printf("%s sleeping\n", __func__);
+        sleep(10);
+        printf("%s awake\n", __func__);
+    } else {
+        printf("%s not-sleeping count:%d\n", __func__, count);
+    }
 	DB_LOG *dblp;
 	DB_LSN trunclsn, prevlsn, purge_lsn;
 	DB_REP *db_rep;
