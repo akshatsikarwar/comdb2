@@ -779,8 +779,7 @@ unsigned long long bdb_get_cmp_context_int(bdb_state_type *bdb_state)
 
     /* if we're the master, get a context, otherwise use the last one we
        recieved from the master */
-    if (bdb_state->repinfo->master_host ==
-        net_get_mynode(bdb_state->repinfo->netinfo)) {
+    if (bdb_i_am_master()) {
         return get_genid(bdb_state, 0);
     } else {
         return get_gblcontext(bdb_state);

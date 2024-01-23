@@ -429,7 +429,7 @@ void bdb_losemaster(bdb_state_type *bdb_state)
     if (bdb_state->parent)
         bdb_state = bdb_state->parent;
 
-    if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
+    if (bdb_i_am_master()) {
         logmsg(LOGMSG_INFO, "trapped to lost mastership\n");
         bdb_state->need_to_downgrade_and_lose = 1;
     }
@@ -438,8 +438,7 @@ void bdb_losemaster(bdb_state_type *bdb_state)
 
 int bdb_is_an_unconnected_master(bdb_state_type *bdb_state)
 {
-    if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost) {
-        /*not a master, so not standalone */
+    if (!bdb_i_am_master()) {
         return 0;
     }
 
@@ -457,8 +456,7 @@ void bdb_transfermaster(bdb_state_type *bdb_state)
         bdb_state = bdb_state->parent;
 
 
-    if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost) {
-        /*not a master */
+    if (!bdb_i_am_master()) {
         return;
     }
 
@@ -527,7 +525,7 @@ void bdb_transfermaster_tonode(bdb_state_type *bdb_state, struct interned_string
         bdb_state = bdb_state->parent;
 
     /* get out of here if we arent the master */
-    if (bdb_state->repinfo->master_host_interned != myhost) {
+    if (!bdb_i_am_master()) {
         return;
     }
 
@@ -626,7 +624,7 @@ int bdb_sync_cluster(bdb_state_type *bdb_state, int sync_all)
     }
 
     /* fill in the lsn part in seqnum */
-    get_master_lsn(bdb_state, &(seqnum.lsn));
+    get_master_lsn(&(seqnum.lsn));
     if (sync_all) {
         rc = bdb_wait_for_seqnum_from_all(bdb_state, (seqnum_type *)&seqnum);
     } else {
@@ -640,8 +638,9 @@ static void send_context_to_all(bdb_state_type *bdb_state)
     if (!bdb_state->attr->net_send_gblcontext)
         return;
     /* only the master can send these */
-    if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost)
+    if (!bdb_i_am_master()) {
         return;
+    }
     unsigned long long gblcontext = get_gblcontext(bdb_state);
     void *data[] = {&gblcontext};
     int sz[] = {sizeof(gblcontext)};
@@ -707,7 +706,8 @@ static int throttle_updates_incoherent_nodes(netinfo_type *netinfo_ptr, struct i
 
         DB_LSN *lsnp, *masterlsn;
         struct hostinfo *h = retrieve_hostinfo(host);
-        struct hostinfo *m = retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
+        struct hostinfo *m = NULL; //retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
+        abort();
 
         lsnp = &h->seqnum.lsn;
         masterlsn = &m->seqnum.lsn;
@@ -949,11 +949,14 @@ int berkdb_send_rtn(DB_ENV *dbenv, const DBT *control, const DBT *rec,
         int flag[2];
         int num = 0;
         uint64_t gblcontext;
-        if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost &&
-            is_logput && tran && bdb_state->attr->net_send_gblcontext &&
-            nodelay && !gbl_rowlocks &&
+        if (bdb_i_am_master() &&
+            is_logput &&
+            tran &&
+            bdb_state->attr->net_send_gblcontext &&
+            nodelay &&
+            !gbl_rowlocks &&
             (gblcontext = get_gblcontext(bdb_state)) != 0
-        ) {
+        ){
             if (gblcontext == -1ULL) {
                 logmsg(LOGMSG_ERROR, "SENDING context -1 to all nodes\n");
                 cheap_stack_trace();
@@ -1471,10 +1474,9 @@ static void *add_thread_int(bdb_state_type *bdb_state, int add_delay)
     if (bdb_state->parent)
         bdb_state = bdb_state->parent;
 
-    if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost) {
+    if (!bdb_i_am_master()) {
         logmsg(LOGMSG_USER, "%s: not-adding: master-hode=%s myhost=%s\n",
-               __func__, bdb_state->repinfo->master_host,
-               bdb_state->repinfo->myhost);
+               __func__, bdb_whomaster(), bdb_state->repinfo->myhost);
         goto done;
     } else if (gbl_is_physical_replicant == 1) {
 	logmsg(LOGMSG_USER, "physrep: %s:%d: Not inserting a dummy record\n", __func__, __LINE__);
@@ -1484,7 +1486,7 @@ static void *add_thread_int(bdb_state_type *bdb_state, int add_delay)
     if (gbl_write_dummy_trace) {
         logmsg(LOGMSG_USER,
                "%s: adding dummy record for master %s, host %s\n", __func__,
-               bdb_state->repinfo->master_host, bdb_state->repinfo->myhost);
+               bdb_whomaster(), bdb_state->repinfo->myhost);
     }
 
     add_dummy(bdb_state);
@@ -1705,7 +1707,7 @@ void net_newnode_rtn(netinfo_type *netinfo_ptr, struct interned_string *host, in
     bdb_state = net_get_usrptr(netinfo_ptr);
 
     /* if we're the master, treat it as incoherent till proven wrong */
-    if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
+    if (bdb_i_am_master()) {
         Pthread_mutex_lock(&(bdb_state->coherent_state_lock));
 
         set_coherent_state(bdb_state, host, STATE_INCOHERENT_WAIT, __func__,
@@ -1784,7 +1786,6 @@ void *hostdown_thread(void *arg)
     bdb_state_type *bdb_state;
     hostdown_type *hostdown_buf;
     char *host;
-    char *master_host;
 
     thread_started("bdb hostdown");
 
@@ -1800,30 +1801,24 @@ void *hostdown_thread(void *arg)
 
     BDB_READLOCK("hostdown_thread");
 
-    master_host = bdb_state->repinfo->master_host;
-
-    print(bdb_state, "master is %s we are %s\n", master_host,
-          bdb_state->repinfo->myhost);
+    char *master_host = bdb_whomaster();
+    print(bdb_state, "master is %s we are %s\n", master_host, bdb_state->repinfo->myhost);
 
     if (gbl_reset_on_unelectable_cluster) {
         int num_up, num_connected, electable;
 
-        print(bdb_state, "xxx master is %s we are %s\n", master_host,
-              bdb_state->repinfo->myhost);
+        print(bdb_state, "xxx master is %s we are %s\n", master_host, bdb_state->repinfo->myhost);
         electable = is_electable(bdb_state, &num_up, &num_connected);
-        print(bdb_state, "connected to %d out of %d up nodes\n", num_connected,
-              num_up);
+        print(bdb_state, "connected to %d out of %d up nodes\n", num_connected, num_up);
 
         if (!electable) {
-
-            /* dont bother holding an election,  WE JUST SAID CLUSTER IS
-               UNELECTABLE */
+            /* dont bother holding an election,  WE JUST SAID CLUSTER IS UNELECTABLE */
             if (master_host == bdb_state->repinfo->myhost) {
                 logmsg(LOGMSG_WARN, "cluster is unelectable, downgrading\n");
                 bdb_downgrade_noelect(bdb_state);
             } else {
                 logmsg(LOGMSG_WARN, "cluster is unelectable, reseting the master\n");
-                bdb_state->repinfo->master_host = db_eid_invalid;
+                thedb_set_master(db_eid_invalid);
             }
         }
     }
@@ -1868,7 +1863,6 @@ int net_hostdown_rtn(netinfo_type *netinfo_ptr, struct interned_string *host)
     pthread_t tid;
     hostdown_type *hostdown_buf;
     int rc;
-    char *master_host;
 
     /* get a pointer back to our bdb_state */
     bdb_state = net_get_usrptr(netinfo_ptr);
@@ -1876,18 +1870,13 @@ int net_hostdown_rtn(netinfo_type *netinfo_ptr, struct interned_string *host)
     if (bdb_state->exiting)
         return 0;
 
-    /* I don't think you need the bdb lock here */
-    /*BDB_READLOCK("hostdown_rtn");*/
-    master_host = bdb_state->repinfo->master_host;
-
     print(bdb_state, "net_hostdown_rtn: called for %s\n", host->str);
 
     struct hostinfo *h = retrieve_hostinfo(host);
 
     /* if we're the master */
-    if (master_host == bdb_state->repinfo->myhost) {
-        /* clobber his state blindly.  we have no lsn here, just keep the last
-           one in place.  */
+    if (bdb_i_am_master()) {
+        /* Clobber it's state blindly.  We have no lsn here, just keep the last one in place. */
         Pthread_mutex_lock(&(bdb_state->coherent_state_lock));
 
         if (h->coherent_state == STATE_COHERENT) {
@@ -1900,8 +1889,7 @@ int net_hostdown_rtn(netinfo_type *netinfo_ptr, struct interned_string *host)
              * replicant will run recovery to catch up
              */
             defer_commits(bdb_state, host->str, __func__);
-            set_coherent_state(bdb_state, host, STATE_INCOHERENT, __func__,
-                               __LINE__);
+            set_coherent_state(bdb_state, host, STATE_INCOHERENT, __func__, __LINE__);
         }
 
         /* hostdown can defer commits */
@@ -1909,11 +1897,9 @@ int net_hostdown_rtn(netinfo_type *netinfo_ptr, struct interned_string *host)
         Pthread_mutex_unlock(&(bdb_state->coherent_state_lock));
         trigger_unregister_node(host->str);
     }
-    /*BDB_RELLOCK();*/
 
-    if (host->str == master_host) {
-        logmsg(LOGMSG_WARN, "net_hostdown_rtn: HOSTDOWN was the master, calling "
-                        "for election\n");
+    if (host->str == bdb_whomaster()) {
+        logmsg(LOGMSG_WARN, "net_hostdown_rtn: HOSTDOWN was the master, calling for election\n");
 
         /* this is replicant, we are running election followed by recovery */
 
@@ -2369,17 +2355,14 @@ static void got_new_seqnum_from_node(bdb_state_type *bdb_state,
                 logmsg(LOGMSG_USER,
                        "%s: got seqnum from %s of gen %u (high), i want %u, count=%llu\n",
                        __func__, host, seqnum->generation, mygen, count);
-            } else
-            if (bdb_state->attr->downgrade_on_seqnum_gen_mismatch &&
-                bdb_state->repinfo->master_host == bdb_state->repinfo->myhost)
+            } else if (bdb_state->attr->downgrade_on_seqnum_gen_mismatch && bdb_i_am_master()) {
                 call_for_election(bdb_state, __func__, __LINE__);
+            }
             return;
         }
 
         memcpy(&issue_time, seqnum->issue_time, sizeof(issue_time));
-        if (bdb_state->attr->master_lease &&
-            bdb_state->repinfo->master_host == bdb_state->repinfo->myhost &&
-            issue_time) {
+        if (bdb_state->attr->master_lease && bdb_i_am_master() && issue_time) {
             static time_t lastpr = 0;
             time_t now;
 
@@ -2516,13 +2499,12 @@ static void got_new_seqnum_from_node(bdb_state_type *bdb_state,
         }
     }
 
-    if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost)
+    if (bdb_i_am_master())
         update_node_acks(bdb_state, hostinterned, is_tcp);
 
     Pthread_mutex_unlock(&(bdb_state->seqnum_info->lock));
 
-    if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost) {
-        /* we're done here if we're not the master */
+    if (!bdb_i_am_master()) {
         return;
     }
 
@@ -2535,7 +2517,7 @@ static void got_new_seqnum_from_node(bdb_state_type *bdb_state,
 
     /* new LSN from node: we may need to make the node coherent */
     Pthread_mutex_lock(&(bdb_state->coherent_state_lock));
-    struct hostinfo *m = retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
+    struct hostinfo *m = retrieve_hostinfo(bdb_whomaster_interned());
 
     if (change_coherency) {
         if (h->coherent_state == STATE_INCOHERENT ||
@@ -2570,7 +2552,7 @@ static void got_new_seqnum_from_node(bdb_state_type *bdb_state,
                                             "is %s removing skip\n",
                                     host, seqnum->lsn.file,
                                     seqnum->lsn.offset, seqnum->generation, gen,
-                                    bdb_state->repinfo->master_host);
+                                    bdb_whomaster());
 
                             bdb_zap_lsn_waitlist(bdb_state, hostinterned);
                         }
@@ -3354,7 +3336,7 @@ got_ack:
                     defer_commits(bdb_state, nodelist[i]->str, __func__);
 
                 /* Change to INCOHERENT_WAIT if we allow catchup on commit */
-                struct hostinfo *m = retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
+                struct hostinfo *m = retrieve_hostinfo(bdb_whomaster_interned());
                 if (bdb_state->attr->catchup_on_commit && catchup_window) {
                     masterlsn = &m->seqnum.lsn;
                     cntbytes = subtract_lsn(bdb_state, masterlsn, &nodelsn);
@@ -3556,7 +3538,7 @@ int bdb_get_myseqnum(bdb_state_type *bdb_state, seqnum_type *seqnum)
     } else {
         uint32_t rep_gen;
 
-        if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
+        if (bdb_i_am_master()) {
             bdb_state->dbenv->get_rep_gen(bdb_state->dbenv, &rep_gen);
         } else {
             /* Replicant generation is updated after verify-match */
@@ -3615,8 +3597,8 @@ int request_copydelay(void *bdb_state_in)
 {
     int rc;
     bdb_state_type *bdb_state = (bdb_state_type *)bdb_state_in;
-    rc = net_send_flags(bdb_state->repinfo->netinfo,
-                        bdb_state->repinfo->master_host, USER_TYPE_COMMITDELAYTIMED, NULL,
+    rc = net_send_flags(bdb_state->repinfo->netinfo, bdb_whomaster(),
+                        USER_TYPE_COMMITDELAYTIMED, NULL,
                         0, NET_SEND_NODROP);
     return rc;
 }
@@ -3627,8 +3609,7 @@ int send_myseqnum_to_master(bdb_state_type *bdb_state, int nodelay)
     int rc = 0;
 
     if (0 == (rc = get_myseqnum(bdb_state, p_net_seqnum))) {
-        rc = net_send_nodrop(bdb_state->repinfo->netinfo,
-                             bdb_state->repinfo->master_host,
+        rc = net_send_nodrop(bdb_state->repinfo->netinfo, bdb_whomaster(),
                              USER_TYPE_BERKDB_NEWSEQ, &p_net_seqnum,
                              sizeof(seqnum_type), nodelay);
     } else {
@@ -3687,8 +3668,7 @@ void bdb_set_seqnum(void *in_bdb_state)
 
     /* Always only use get_last_locked.  Leave the other in until we are sure
      * that this code works. */
-    if (gbl_last_locked_seqnum &&
-        bdb_state->repinfo->master_host != bdb_state->repinfo->myhost)
+    if (gbl_last_locked_seqnum && !bdb_i_am_master())
         bdb_state->dbenv->get_last_locked(bdb_state->dbenv, &lastlsn);
     else
         __log_txn_lsn(bdb_state->dbenv, &lastlsn, NULL, NULL);
@@ -3934,8 +3914,10 @@ static int process_berkdb(bdb_state_type *bdb_state, char *host, DBT *control, D
     if ((!bdb_state->caught_up) || (bdb_state->exiting))
         make_lsn(&permlsn, INT_MAX, INT_MAX);
 
-    if ((force_election) && (bdb_state->caught_up) &&
-        (host == bdb_state->repinfo->master_host)) {
+    if (force_election && 
+        bdb_state->caught_up &&
+        bdb_i_am_master()
+    ){
         logmsg(LOGMSG_WARN, "master %s requested election\n", host);
         r = DB_REP_HOLDELECTION;
         master_confused = 1;
@@ -3963,15 +3945,13 @@ static int process_berkdb(bdb_state_type *bdb_state, char *host, DBT *control, D
         /* master shouldnt respond to this with calling for election?
            source - original demo program (ex_rq_util.c) and more recent
            berkdb docs */
-        if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost)
+        if (bdb_i_am_master())
             break;
 
         /* if we are connected to the master, dont respond to this call
            for election - unless it is confused and calling for
            the election itself! */
-        if (net_is_connected(bdb_state->repinfo->netinfo,
-                             bdb_state->repinfo->master_host) &&
-            !master_confused)
+        if (net_is_connected(bdb_state->repinfo->netinfo, bdb_whomaster()) && !master_confused)
             break;
 
         call_for_election(bdb_state, __func__, __LINE__);
@@ -4034,7 +4014,7 @@ static int process_berkdb(bdb_state_type *bdb_state, char *host, DBT *control, D
 
         } else {
             /* it's not us, but we were master - we need to downgrade */
-            if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
+            if (bdb_i_am_master()) {
                 rc = bdb_downgrade(bdb_state, egen, &done);
             } else
                 done = 1;
@@ -4053,7 +4033,7 @@ static int process_berkdb(bdb_state_type *bdb_state, char *host, DBT *control, D
         break;
 
     case DB_REP_DUPMASTER:
-        oldmaster = bdb_state->repinfo->master_host;
+        oldmaster = bdb_whomaster();
         bdb_state->repinfo->repstats.rep_dupmaster++;
         logmsg(LOGMSG_WARN, "rep_process_message: got DUPMASTER from %s, "
                 "I think master is %s.  dowgrading and calling for election\n",
@@ -4100,9 +4080,8 @@ static int process_berkdb(bdb_state_type *bdb_state, char *host, DBT *control, D
     case DB_REP_OUTDATED: {
         bdb_state->repinfo->repstats.rep_outdated++;
 
-        if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost) {
-            logmsg(LOGMSG_FATAL, 
-                    "this database needs to be hot copied with copycomdb2\n");
+        if (!bdb_i_am_master()) {
+            logmsg(LOGMSG_FATAL, "this database needs to be hot copied with copycomdb2\n");
             logmsg(LOGMSG_FATAL, "exiting now\n");
             exit(1);
         } else {
@@ -4122,26 +4101,20 @@ static int process_berkdb(bdb_state_type *bdb_state, char *host, DBT *control, D
 
     default:
         bdb_state->repinfo->repstats.rep_other++;
-        logmsg(LOGMSG_ERROR, "rep_process_message: from %s got %d "
-                        "control->size=%d rec->size=%d\n",
-                host, r, control->size, rec->size);
-        /* for the future, just in case we decide __rep_process_message
-           will return new codes that are not handled here, propagate them
-           higher */
+        logmsg(LOGMSG_ERROR, "rep_process_message: from %s got %d control->size=%d rec->size=%d\n",
+               host, r, control->size, rec->size);
+        /* For the future, just in case we decide __rep_process_message will
+         * return new codes that are not handled here, propagate them higher */
         outrc = r;
         /* Actually, changed my mind; this message is lost since the receive
-           master routine
-           "returns" void.  This can be a failed TXN_APPLY for a commit, and
-           we're corrupting
-           database (losing transactions).  A checkpoint following this will
-           make the
-           corruption undetectable upon restart until the page is accessed. */
-        if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost) {
+         * master routine "returns" void.  This can be a failed TXN_APPLY for a
+         * commit, and we're corrupting database (losing transactions).  A
+         * checkpoint following this will make the corruption undetectable upon
+         * restart until the page is accessed. */
+        if (!bdb_i_am_master()) {
             /* force this node to resync its log */
             if (bdb_state->attr->elect_on_mismatched_master) {
-                logmsg(LOGMSG_ERROR,
-                       "Call for election on strange msgtype %d on replicant\n",
-                       r);
+                logmsg(LOGMSG_ERROR, "Call for election on strange msgtype %d on replicant\n", r);
                 call_for_election(bdb_state, __func__, __LINE__);
             } else
                 abort();
@@ -4155,10 +4128,10 @@ static int process_berkdb(bdb_state_type *bdb_state, char *host, DBT *control, D
 int gbl_force_incoherent = 0;
 int gbl_ignore_coherency = 0;
 
-static int bdb_am_i_coherent_int(bdb_state_type *bdb_state)
+static int bdb_am_i_coherent_int(void)
 {
     /*master can't be incoherent*/
-    if (bdb_amimaster(bdb_state))
+    if (bdb_i_am_master())
         return 1;
 
     /* force_incoherent overrides ignore_coherency */
@@ -4166,29 +4139,23 @@ static int bdb_am_i_coherent_int(bdb_state_type *bdb_state)
         static time_t lastpr = 0;
         time_t now = time(NULL);
         if (now - lastpr) {
-            logmsg(LOGMSG_WARN,
-                   "%s returning INCOHERENT on force_incoherent = true\n",
-                   __func__);
+            logmsg(LOGMSG_WARN, "%s returning INCOHERENT on force_incoherent = true\n", __func__);
             lastpr = now;
         }
         return 0;
     }
 
     /* if we are a rtcpued off replicant, we cant be coherent */
-    if (bdb_state->callback->nodeup_rtn) {
-        if (!(bdb_state->callback->nodeup_rtn(bdb_state,
-                                              bdb_state->repinfo->myhost))) {
-            return 0;
-        }
+    NODEUPFP nodeup = gbl_bdb_state->callback->nodeup_rtn;
+    if (nodeup && !nodeup(gbl_bdb_state, gbl_bdb_state->repinfo->myhost)) {
+        return 0;
     }
 
     if (gbl_ignore_coherency) {
         static time_t lastpr = 0;
         time_t now = time(NULL);
         if (now - lastpr) {
-            logmsg(LOGMSG_WARN,
-                   "%s ignoring coherency on 'ignore_coherency' = true\n",
-                   __func__);
+            logmsg(LOGMSG_WARN, "%s ignoring coherency on 'ignore_coherency' = true\n", __func__);
             lastpr = now;
         }
         return 1;
@@ -4200,39 +4167,32 @@ static int bdb_am_i_coherent_int(bdb_state_type *bdb_state)
     return ret;
 }
 
-int bdb_valid_lease(void *in_bdb_state)
+int bdb_valid_lease(void)
 {
     int x;
-    bdb_state_type *bdb_state = (bdb_state_type *)in_bdb_state;
+    bdb_state_type *bdb_state = gbl_bdb_state;
     BDB_READLOCK("bdb_am_i_coherent");
     x = (gettimeofday_ms() <= get_coherency_timestamp());
     BDB_RELLOCK();
     return x;
 }
 
-int bdb_am_i_coherent(bdb_state_type *bdb_state)
+int bdb_am_i_coherent(void)
 {
-    int x;
-
-    if (bdb_state->parent)
-        bdb_state = bdb_state->parent;
-
+    bdb_state_type *bdb_state = gbl_bdb_state;
     BDB_READLOCK("bdb_am_i_coherent");
-
-    x = bdb_am_i_coherent_int(bdb_state);
-
+    int x = bdb_am_i_coherent_int();
     BDB_RELLOCK();
-
     return x;
 }
 
-int bdb_try_am_i_coherent(bdb_state_type *bdb_state)
+int bdb_try_am_i_coherent(void)
 {
     int coherent = 0;
-    if (bdb_state->parent) bdb_state = bdb_state->parent;
+    bdb_state_type *bdb_state = gbl_bdb_state;
     if (BDB_TRYREADLOCK("bdb_am_i_coherent") == 0) {
         /* if we cannot get bdb-lock, we are not coherent */
-        coherent = bdb_am_i_coherent_int(bdb_state);
+        coherent = bdb_am_i_coherent_int();
         BDB_RELLOCK();
     }
     return coherent;
@@ -4355,12 +4315,11 @@ void receive_start_lsn_request(void *ack_handle, void *usr_ptr, char *from_host,
     uint8_t *p_buf, *p_buf_end;
     uint32_t current_gen;
     bdb_state_type *bdb_state = usr_ptr;
-    repinfo_type *repinfo = bdb_state->repinfo;
 
     if (bdb_state->parent)
         bdb_state = bdb_state->parent;
 
-    if (repinfo->master_host != repinfo->myhost) {
+    if (!bdb_i_am_master()) {
         logmsg(LOGMSG_ERROR, "%s returning bad rcode because i am not master\n", 
                 __func__);
         net_ack_message(ack_handle, 1);
@@ -4414,7 +4373,6 @@ void receive_coherency_lease(void *ack_handle, void *usr_ptr, char *from_host,
 {
     uint8_t *p_buf, *p_buf_end;
     uint64_t base_ts;
-    char *master_host;
     int receive_trace;
     bdb_state_type *bdb_state;
     colease_t colease = {0};
@@ -4436,7 +4394,7 @@ void receive_coherency_lease(void *ack_handle, void *usr_ptr, char *from_host,
     if (bdb_state->parent)
         bdb_state = bdb_state->parent;
 
-    master_host = bdb_state->repinfo->master_host;
+    char *master_host = bdb_whomaster();
     if (from_host != master_host) {
         static time_t lastpr = 0;
         time_t now;
@@ -4804,7 +4762,7 @@ void berkdb_receive_msg(void *ack_handle, void *usr_ptr, char *from_host,
         break;
 
     case USER_TYPE_DOWNGRADEANDLOSE: {
-        if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
+        if (bdb_i_am_master()) {
             if (bdb_state->need_to_downgrade_and_lose) {
                 logmsg(LOGMSG_WARN, "i was already told to downgrade and lose. ignore this request.\n");
             } else {
@@ -5225,7 +5183,7 @@ static int berkdb_receive_rtn_int(void *ack_handle, void *usr_ptr,
     case USER_TYPE_GBLCONTEXT:
         if (dtalen >= sizeof(unsigned long long)) {
             memcpy(&master_cmpcontext, dta, sizeof(unsigned long long));
-            if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost) {
+            if (!bdb_i_am_master()) {
                 bdb_state->got_gblcontext = 1;
                 set_gblcontext(bdb_state, master_cmpcontext);
             }
@@ -5276,13 +5234,8 @@ again:
 
 void send_downgrade_and_lose(bdb_state_type *bdb_state)
 {
-    int rc;
-
-    rc = 0;
-
-    rc = net_send_message(
-        bdb_state->repinfo->netinfo, bdb_state->repinfo->master_host,
-        USER_TYPE_DOWNGRADEANDLOSE, &rc, sizeof(int), 1, 10 * 1000);
+    int rc = net_send_message(bdb_state->repinfo->netinfo, bdb_whomaster(),
+                              USER_TYPE_DOWNGRADEANDLOSE, &rc, sizeof(int), 1, 10 * 1000);
     if (rc != 0) {
         logmsg(LOGMSG_ERROR, "send_downgrade_and_lose rc %d\n", rc);
     }
@@ -5296,12 +5249,9 @@ int bdb_clean_pglogs_queues(bdb_state_type *bdb_state, DB_LSN lsn,
 
 int request_delaymore(void *bdb_state_in)
 {
-    int rc;
     bdb_state_type *bdb_state = (bdb_state_type *)bdb_state_in;
-    rc = net_send_flags(bdb_state->repinfo->netinfo,
-                        bdb_state->repinfo->master_host,
-                        USER_TYPE_COMMITDELAYMORE, NULL, 0, NET_SEND_NODROP | NET_SEND_NODELAY);
-    return rc;
+    return net_send_flags(bdb_state->repinfo->netinfo, bdb_whomaster(), USER_TYPE_COMMITDELAYMORE,
+                          NULL, 0, NET_SEND_NODROP | NET_SEND_NODELAY);
 }
 
 int gbl_rep_wait_core_ms = 0;
@@ -5337,7 +5287,6 @@ void *watcher_thread(void *arg)
     bdb_state_type *bdb_state;
     extern int gbl_rep_lock_time_ms;
     extern int gbl_truncating_log;
-    char *master_host = db_eid_invalid;
     int stopped_count = 0;
     int i;
     int j;
@@ -5345,7 +5294,6 @@ void *watcher_thread(void *arg)
     int rc;
     int master_is_bad = 0;
     int done = 0;
-    char *rep_master = 0;
     int list_start;
 
     gbl_watcher_thread_ran = comdb2_time_epoch();
@@ -5440,12 +5388,12 @@ void *watcher_thread(void *arg)
 
         /* are we incoherent?  see how we're doing, let's send commitdelay
            if we are falling far behind */
-        if (!bdb_am_i_coherent_int(bdb_state)) {
+        if (!bdb_am_i_coherent_int()) {
             int last_behind = INT_MAX;
             int num_times_behind = 0;
             DB_LSN my_lsn = {0}, master_lsn = {0};
             get_my_lsn(bdb_state, &my_lsn);
-            get_master_lsn(bdb_state, &master_lsn);
+            get_master_lsn(&master_lsn);
             int behind = subtract_lsn(bdb_state, &master_lsn, &my_lsn);
             if (behind > bdb_state->attr->commitdelaybehindthresh) {
                 if (behind > last_behind) /* we are falling further behind */
@@ -5459,9 +5407,8 @@ void *watcher_thread(void *arg)
                     if (bdb_state->attr->enable_incoherent_delaymore) {
                         int rc = request_delaymore(bdb_state);
                         if (rc != 0) {
-                            logmsg(LOGMSG_ERROR,
-                                   "failed to send COMMITDELAYMORE to %s\n",
-                                   bdb_state->repinfo->master_host);
+                            logmsg(LOGMSG_ERROR, "failed to send COMMITDELAYMORE to %s\n",
+                                   bdb_whomaster());
                         } else if (gbl_commit_delay_trace) {
                             logmsg(LOGMSG_USER,
                                    "%s line %d requested COMMITDELAYMORE\n",
@@ -5477,7 +5424,7 @@ void *watcher_thread(void *arg)
         }
 
         /* are we the master?  do we have lots of incoherent nodes? */
-        if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
+        if (bdb_i_am_master()) {
             int count;
             struct interned_string *hostlist[REPMAX];
             int num_skipped;
@@ -5562,8 +5509,9 @@ void *watcher_thread(void *arg)
             pthread_exit(NULL);
         }
 
-        master_host = bdb_state->repinfo->master_host;
+        char *rep_master;
         bdb_get_rep_master(bdb_state, &rep_master, NULL, NULL);
+        char *master_host = bdb_whomaster();
 
         if (bdb_state->caught_up) {
             /* periodically send info too all nodes about our curresnt LSN and
@@ -5585,65 +5533,61 @@ void *watcher_thread(void *arg)
            */
 
         /* if we are rtcpued off and are master, downgrade ourselves */
-        if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
-            if (rep_master == bdb_state->repinfo->myhost) {
-                if (bdb_state->callback->nodeup_rtn) {
-                    if (!(bdb_state->callback->nodeup_rtn(
-                            bdb_state, bdb_state->repinfo->myhost))) {
-                        /* don't downgrade if not in a cluster as then we will
-                           needlessly flip in and out of read-only state until
-                           the node is routed on again.
+        if (rep_master == master_host) {
+            if (bdb_state->callback->nodeup_rtn) {
+                if (!(bdb_state->callback->nodeup_rtn(
+                        bdb_state, bdb_state->repinfo->myhost))) {
+                    /* don't downgrade if not in a cluster as then we will
+                       needlessly flip in and out of read-only state until
+                       the node is routed on again.
 
-                           For this case, if there's not another node available,
-                           this node will stay master. */
-                        int num = net_count_nodes(bdb_state->repinfo->netinfo);
-                        if (num > 1 &&
-                            bdb_state->attr->allow_offline_upgrades) {
-                            int count;
-                            const char *hostlist[REPMAX];
+                       For this case, if there's not another node available,
+                       this node will stay master. */
+                    int num = net_count_nodes(bdb_state->repinfo->netinfo);
+                    if (num > 1 &&
+                        bdb_state->attr->allow_offline_upgrades) {
+                        int count;
+                        const char *hostlist[REPMAX];
 
-                            /* Check all nodes.  Transfer master if one is
-                             * online. */
-                            count = net_get_all_nodes_connected(
-                                bdb_state->repinfo->netinfo, hostlist);
+                        /* Check all nodes.  Transfer master if one is
+                         * online. */
+                        count = net_get_all_nodes_connected(
+                            bdb_state->repinfo->netinfo, hostlist);
 
-                            for (i = 0; i < count; i++) {
-                                if ((bdb_state->callback->nodeup_rtn)(
-                                        bdb_state, hostlist[i])) {
-                                    logmsg(LOGMSG_WARN, 
-                                        "transfering master because im rtcpued"
-                                        "off and another node is available\n");
-                                    bdb_transfermaster(bdb_state);
+                        for (i = 0; i < count; i++) {
+                            if ((bdb_state->callback->nodeup_rtn)(
+                                    bdb_state, hostlist[i])) {
+                                logmsg(LOGMSG_WARN, 
+                                    "transfering master because im rtcpued"
+                                    "off and another node is available\n");
+                                bdb_transfermaster(bdb_state);
 
-                                    break;
-                                }
+                                break;
                             }
                         }
-                        /* If there's no other node available, transfermaster
-                         * will call
-                         * for an election.  */
-                        else if (num > 1 && !bdb_state->need_to_downgrade_and_lose) {
-                            logmsg(LOGMSG_WARN, 
-                                   "transfering master because im rtcpued off\n");
-                            bdb_transfermaster(bdb_state);
-                        } else {
-                            /* Stay master if you are a single node.  Local
-                               processes
-                               will still be able to write.  */
-                        }
+                    }
+                    /* If there's no other node available, transfermaster
+                     * will call
+                     * for an election.  */
+                    else if (num > 1 && !bdb_state->need_to_downgrade_and_lose) {
+                        logmsg(LOGMSG_WARN, 
+                               "transfering master because im rtcpued off\n");
+                        bdb_transfermaster(bdb_state);
+                    } else {
+                        /* Stay master if you are a single node.  Local
+                           processes
+                           will still be able to write.  */
                     }
                 }
-            } else {
-                /* mismatch between master_host and rep_master*/
-                bdb_downgrade(bdb_state, 0, NULL);
             }
+        } else {
+            /* mismatch between master_host and rep_master*/
+            bdb_downgrade(bdb_state, 0, NULL);
         }
 
         /* if the master is marked down, and we are not, try to become master */
         if (bdb_state->callback->nodeup_rtn) {
-            char *mynode;
-
-            mynode = bdb_state->repinfo->myhost;
+            char *mynode = bdb_state->repinfo->myhost;
 
             /*
                IF
@@ -5655,20 +5599,14 @@ void *watcher_thread(void *arg)
                  tell it to yield.
              */
 
-            master_host = bdb_state->repinfo->master_host;
-
             if ((master_host != mynode) &&
                 (!(bdb_state->callback->nodeup_rtn)(bdb_state, master_host)) &&
                 ((bdb_state->callback->nodeup_rtn)(bdb_state, mynode))) {
                 master_is_bad++;
 
-                logmsg(LOGMSG_WARN,
-                       "master %s is marked down and i am up telling him to "
-                       "yield\n",
-                       master_host);
+                logmsg(LOGMSG_WARN, "master %s is marked down and i am up telling it to yield\n", master_host);
                 send_downgrade_and_lose(bdb_state);
-                /* Don't call for election- the other node will transfer
-                 * master. */
+                /* Don't call for election- the other node will transfer master. */
             } else {
                 master_is_bad = 0;
             }
@@ -5723,7 +5661,7 @@ void *watcher_thread(void *arg)
         }
 
         /* downgrade ourselves if we are in a dupmaster situation */
-        if (master_host == bdb_master_dupe) {
+        if (master_host == db_eid_dupmaster) {
             print(bdb_state, "calling bdb_downgrade\n");
             bdb_downgrade(bdb_state, 0, NULL);
             print(bdb_state, "back from bdb_downgrade\n");
@@ -5867,7 +5805,7 @@ int bdb_master_should_reject(bdb_state_type *bdb_state)
         return 0;
     }
 
-    if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost) {
+    if (!bdb_i_am_master()) {
         BDB_RELLOCK();
         return 0;
     }
@@ -5917,10 +5855,7 @@ int bdb_debug_logreq(bdb_state_type *bdb_state, int file, int offset)
     DB_LSN lsn;
     lsn.file = file;
     lsn.offset = offset;
-
-    __rep_send_message(bdb_state->dbenv, bdb_state->repinfo->master_host,
-                       REP_LOG_REQ, &lsn, NULL, 0, NULL);
-
+    __rep_send_message(bdb_state->dbenv, bdb_whomaster(), REP_LOG_REQ, &lsn, NULL, 0, NULL);
     return 0;
 }
 
@@ -5957,11 +5892,9 @@ int request_durable_lsn_from_master(bdb_state_type *bdb_state,
     if (waitms <= 0) 
         waitms = 1000;
 
-    if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
-        if (bdb_state->attr->master_lease && !verify_master_leases(bdb_state, 
-                    __func__, __LINE__)) {
-            logmsg(LOGMSG_ERROR, "%s line %d failed verifying master leases\n", 
-                    __func__, __LINE__);
+    if (bdb_i_am_master()) {
+        if (bdb_state->attr->master_lease && !verify_master_leases(bdb_state, __func__, __LINE__)) {
+            logmsg(LOGMSG_ERROR, "%s line %d failed verifying master leases\n", __func__, __LINE__);
             badcount++;
             return -2;
         }
@@ -5992,16 +5925,14 @@ int request_durable_lsn_from_master(bdb_state_type *bdb_state,
 
     start_time = gettimeofday_ms();
     if ((rc = net_send_message_payload_ack(
-             bdb_state->repinfo->netinfo, bdb_state->repinfo->master_host,
+             bdb_state->repinfo->netinfo, bdb_whomaster(),
              USER_TYPE_REQ_START_LSN, (void *)&data, sizeof(data),
              (uint8_t **)&buf, &buflen, 1, waitms)) != 0) {
         end_time = gettimeofday_ms();
         if (rc == NET_SEND_FAIL_TIMEOUT) {
             logmsg(LOGMSG_WARN,
-                   "%s line %d: timed out waiting for start_lsn from master %s "
-                   "after %" PRIu64 " ms\n",
-                   __func__, __LINE__, bdb_state->repinfo->master_host,
-                   end_time - start_time);
+                   "%s line %d: timed out waiting for start_lsn from master %s after %" PRIu64 " ms\n",
+                   __func__, __LINE__, bdb_whomaster(), end_time - start_time);
         }
         else {
             logmsg(LOGMSG_USER, "%s line %d: net_send_message_payload_ack returns %d\n",

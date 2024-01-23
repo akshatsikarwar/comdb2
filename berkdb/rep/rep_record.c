@@ -480,11 +480,6 @@ static int apply_thd_created = 0;
 static LISTC_T(struct queued_log) log_queue;
 static LISTC_T(struct repdb_rec) repdb_queue;
 
-void bdb_thread_start_rw(void);
-void bdb_thread_done_rw(void);
-void get_master_lsn(void *bdb_state, DB_LSN *lsnout);
-int bdb_valid_lease(void *bdb_state);
-
 int gbl_verbose_fills = 0;
 
 static int queue_log_more_count = 0;
@@ -736,7 +731,7 @@ static void *apply_thread(void *arg)
 		log_more_count = queue_log_more_count;
 		log_fill_count = queue_log_fill_count;
 		Pthread_mutex_unlock(&rep_queue_lock);
-		get_master_lsn(dbenv->app_private, &master_lsn);
+		get_master_lsn(&master_lsn);
 
 		MUTEX_LOCK(dbenv, db_rep->db_mutexp);
 		master_eid = db_rep->region->master_id;
@@ -753,7 +748,7 @@ static void *apply_thread(void *arg)
 
 		/* Delay more if we are falling further behind */
 		bytes_behind = subtract_lsn(dbenv->app_private, &master_lsn, &my_lsn);
-		if (!bdb_valid_lease(dbenv->app_private)) {
+		if (!bdb_valid_lease()) {
 			if (last_behind && bytes_behind > last_behind) {
 				static int lastinc = 0;
 
@@ -4221,8 +4216,7 @@ processor_thd(struct thdpool *pool, void *work, void *thddata, int op)
 	bdb_thread_start_rw();
 
 	/* Sleep here if the user has asked us to & if we are coherent */
-	if ((polltm = gbl_processor_thd_poll) > 0 && 
-			bdb_am_i_coherent(dbenv->app_private)) {
+	if ((polltm = gbl_processor_thd_poll) > 0 && bdb_am_i_coherent()){
 		int lsize;
 		Pthread_mutex_lock(&dbenv->recover_lk);
 		lsize = listc_size(&dbenv->inflight_transactions);
@@ -8613,8 +8607,3 @@ __rep_inflight_txns_older_than_lsn(DB_ENV *dbenv, DB_LSN *lsn)
 	Pthread_mutex_unlock(&dbenv->recover_lk);
 	return 0;
 }
-
-/* Not crazy about leaving this here.  This is used in bdb and berkdb.  It's
- * initialized in db, early in main.  It doesn't really belong in any one place. */
-char *db_eid_broadcast = NULL;
-char *db_eid_invalid = NULL;

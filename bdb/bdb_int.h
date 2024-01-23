@@ -733,9 +733,6 @@ struct sockaddr_in;
 typedef struct {
     netinfo_type *netinfo;
 
-    struct interned_string *master_host_interned;
-    char *master_host;
-
     struct interned_string *myhost_interned;
     char *myhost;
 
@@ -1157,7 +1154,6 @@ int get_seqnum(bdb_state_type *bdb_state, const char *host);
 uint64_t subtract_lsn(bdb_state_type *bdb_state, DB_LSN *lsn1, DB_LSN *lsn2);
 void get_my_lsn(bdb_state_type *bdb_state, DB_LSN *lsnout);
 void rep_all_req(bdb_state_type *bdb_state);
-void get_master_lsn(bdb_state_type *bdb_state, DB_LSN *lsnout);
 void bdb_print_log_files(bdb_state_type *bdb_state);
 char *lsn_to_str(char lsn_str[], DB_LSN *lsn);
 

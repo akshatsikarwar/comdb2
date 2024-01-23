@@ -2912,10 +2912,16 @@ static void thedb_set_master_int(char *master)
     }
 }
 
+char *thedb_whoismaster(void)
+{
+    const char *master = thedb->master;
+    return master == db_eid_invalid ? NULL : master;
+}
+
 static pthread_mutex_t new_master_lk = PTHREAD_MUTEX_INITIALIZER;
 void thedb_set_master(char *master)
 {
-    if (gbl_create_mode) return;
+    if (gbl_create_mode || !thedb) return;
     Pthread_mutex_lock(&new_master_lk);
     char *old = thedb->master;
     thedb_set_master_int(master);

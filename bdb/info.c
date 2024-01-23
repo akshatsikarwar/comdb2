@@ -698,7 +698,7 @@ void fill_dbinfo(CDB2DBINFORESPONSE *dbinfo_response, bdb_state_type *bdb_state)
             nodeinfos[i]->room =
                 bdb_state->callback->getroom_rtn(bdb_state, nodes[j].host);
             nodeinfos[i]->name = strdup(nodes[j].host);
-            if (strcmp(bdb_state->repinfo->master_host, nodes[j].host) == 0) {
+            if (strcmp(bdb_whomaster(), nodes[j].host) == 0) {
                 master->number = j;
                 master->incoherent = 0;
                 master->has_port = 1;
@@ -710,7 +710,7 @@ void fill_dbinfo(CDB2DBINFORESPONSE *dbinfo_response, bdb_state_type *bdb_state)
             }
             /* We can only query the master for cluster-coherent state */
             nodeinfos[i]->incoherent = 0;
-            if (bdb_state->repinfo->myhost == bdb_state->repinfo->master_host) {
+            if (bdb_am_i_master()) {
                 struct hostinfo *h = retrieve_hostinfo(nodes[j].host_interned);
                 if (h->coherent_state != STATE_COHERENT) {
                     nodeinfos[i]->incoherent = 1;
@@ -737,7 +737,7 @@ void fill_dbinfo(CDB2DBINFORESPONSE *dbinfo_response, bdb_state_type *bdb_state)
             nodeinfos[i]->room =
                 bdb_state->callback->getroom_rtn(bdb_state, nodes[j].host);
             nodeinfos[i]->name = strdup(nodes[j].host);
-            if (strcmp(bdb_state->repinfo->master_host, nodes[j].host) == 0) {
+            if (strcmp(bdb_whomaster(), nodes[j].host) == 0) {
                 master->number = j;
                 master->incoherent = 0;
                 master->has_port = 1;
@@ -771,7 +771,7 @@ static void netinfo_dump_hostname(FILE *out, bdb_state_type *bdb_state)
     num_nodes = net_get_nodes_info(bdb_state->repinfo->netinfo, REPMAX, nodes);
 
     logmsgf(LOGMSG_USER, out, "db engine cluster status\n");
-    if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost) {
+    if (!bdb_am_i_master()) {
         logmsgf(LOGMSG_USER, out, "WARNING: this information is only valid on the master\n");
         logmsgf(LOGMSG_USER, out, "Use 'stat' to find out the coherent state of this node\n");
     }
@@ -794,7 +794,7 @@ static void netinfo_dump_hostname(FILE *out, bdb_state_type *bdb_state)
         } else {
             status = "c";
         }
-        if (bdb_state->repinfo->master_host == nodes[ii].host) {
+        if (bdb_am_i_master()) {
             status_mstr = "MASTER";
         } else {
             status_mstr = " ";
@@ -850,7 +850,7 @@ void bdb_short_netinfo_dump(FILE *out, bdb_state_type *bdb_state)
             status = "c";
         }
         struct hostinfo *h = retrieve_hostinfo(nodes[ii].host_interned);
-        if (bdb_state->repinfo->master_host == nodes[ii].host)
+        if (bdb_whomaster() == nodes[ii].host)
             status_mstr = "MASTER";
         else {
             switch (h->coherent_state) {
@@ -2118,7 +2118,7 @@ void bdb_send_analysed_table_to_master(bdb_state_type *bdb_state, char *table)
     if (!bdb_attr_get(bdb_state->attr, BDB_ATTR_AUTOANALYZE))
         return;
 
-    net_send(bdb_state->repinfo->netinfo, bdb_state->repinfo->master_host,
+    net_send(bdb_state->repinfo->netinfo, bdb_whomaster(),
              USER_TYPE_ANALYZED_TBL, table, strlen(table), 0);
 }
 
@@ -2146,7 +2146,8 @@ repl_wait_and_net_use_t *bdb_get_repl_wait_and_net_stats(
     if (rv == NULL) /* Malloc failed. */
         return NULL;
 
-    struct hostinfo *m = retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
+    abort();
+    struct hostinfo *m = NULL; //retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
     master_lsnp = &m->seqnum.lsn;
 
     for (i = 0; i != nnodes; ++i) {
@@ -2200,8 +2201,6 @@ repl_wait_and_net_use_t *bdb_get_repl_wait_and_net_stats(
 
 char *bdb_coherent_state_string(struct interned_string *host) {
     char *coherent_state;
-    bdb_state_type *bdb_state = gbl_bdb_state;
-    int iammaster = bdb_state->repinfo->myhost == bdb_state->repinfo->master_host;
     struct hostinfo *h = retrieve_hostinfo(host);
 
     switch (h->coherent_state) {
@@ -2219,7 +2218,7 @@ char *bdb_coherent_state_string(struct interned_string *host) {
 
             /* Incoherent local is only meaningful on the master */
         case STATE_INCOHERENT_WAIT:
-            if(iammaster)
+            if(bdb_am_i_master())
                 coherent_state = "INCOHERENT_WAIT";
             else
                 coherent_state = "";
@@ -2245,7 +2244,7 @@ int bdb_fill_cluster_info(void **data, int *num_nodes) {
     for (int i = 0; i < *num_nodes; i++) {
         info[i].host = strdup(nodes[i].host);
         info[i].port = nodes[i].port;
-        info[i].is_master = (nodes[i].host == gbl_bdb_state->repinfo->master_host) ? "Y" : "N";
+        info[i].is_master = bdb_am_i_master() ? "Y" : "N";
         info[i].coherent_state = bdb_coherent_state_string(nodes[i].host_interned);
         if (info[i].coherent_state[0] == 0)
             info[i].coherent_state = "coherent";

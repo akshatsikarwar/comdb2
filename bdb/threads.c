@@ -40,19 +40,16 @@ extern int gbl_is_physical_replicant;
 
 void udp_backup(int dummyfd, short what, void *arg)
 {
-    bdb_state_type *bdb_state = arg;
-    repinfo_type *repinfo = bdb_state->repinfo;
     if (!gbl_udp) return;
-    if (repinfo->master_host == repinfo->myhost) return;
-    send_myseqnum_to_master(bdb_state, 1);
+    if (bdb_i_am_master()) return;
+    send_myseqnum_to_master(gbl_bdb_state, 1);
 }
 
 void auto_analyze(int dummyfd, short what, void *arg)
 {
     bdb_state_type *bdb_state = arg;
-    repinfo_type *repinfo = bdb_state->repinfo;
     if (!bdb_state->attr->autoanalyze) return;
-    if (repinfo->master_host != repinfo->myhost) return;
+    if (!bdb_i_am_master()) return;
     pthread_t t;
     Pthread_create(&t, &gbl_pthread_attr_detached, auto_analyze_main, NULL);
 }
@@ -212,7 +209,6 @@ void *master_lease_thread(void *arg)
 {
     int pollms, renew, lease_time;
     bdb_state_type *bdb_state = (bdb_state_type *)arg;
-    repinfo_type *repinfo = bdb_state->repinfo;
     static int master_lease_thread_running = 0;
 
     if (try_set(&master_lease_thread_running) == 0)
@@ -227,7 +223,7 @@ void *master_lease_thread(void *arg)
     logmsg(LOGMSG_DEBUG, "%s starting\n", __func__);
 
     while (!db_is_exiting() && (lease_time = bdb_state->attr->master_lease) != 0) {
-        if (repinfo->master_host != repinfo->myhost) {
+        if (!bdb_i_am_master()) {
             send_myseqnum_to_master_udp(bdb_state);
         }
 
@@ -251,7 +247,6 @@ void *coherency_lease_thread(void *arg)
     int pollms, renew, lease_time, inc_wait, add_interval;
     static time_t last_add_record = 0;
     bdb_state_type *bdb_state = (bdb_state_type *)arg;
-    repinfo_type *repinfo = bdb_state->repinfo;
     pthread_t tid;
     static int coherency_thread_running = 0;
 
@@ -275,7 +270,7 @@ void *coherency_lease_thread(void *arg)
             BDB_RELLOCK();
             break;
         }
-        if (repinfo->master_host == repinfo->myhost) {
+        if (bdb_i_am_master()) {
             send_coherency_leases(bdb_state, lease_time, &inc_wait);
 
             if (bdb_state->attr->durable_lsns) {

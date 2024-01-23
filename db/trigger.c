@@ -108,7 +108,7 @@ static void trigger_hash_del(trigger_info_t *info)
 static inline int trigger_register_int(trigger_reg_t *t)
 {
     GET_BDB_STATE(bdb_state);
-    if (!bdb_amimaster(bdb_state)) {
+    if (!bdb_am_i_master(bdb_state)) {
         return CDB2_TRIG_NOT_MASTER;
     }
     if (trigger_hash == NULL) {

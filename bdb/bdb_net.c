@@ -29,6 +29,7 @@
 
 #include "bdb_api.h"
 #include "bdb_int.h"
+#include <bdbglue.h>
 #include <net.h>
 #include <locks.h>
 #include <locks_wrap.h>
@@ -160,7 +161,8 @@ int do_ack(bdb_state_type *bdb_state, DB_LSN permlsn, uint32_t generation)
     seqnum_type seqnum = {{0}};
     seqnum.lsn = permlsn;
     seqnum.commit_generation = generation;
-    bdb_state->dbenv->get_rep_gen(bdb_state->dbenv, &seqnum.generation);
+	bdb_state->dbenv->get_rep_master(bdb_state->dbenv, &master, &seqnum.generation, NULL);
+
     /* Master lease time is 0 (master will ignore) */
 
     if (permlsn.file == 0 || seqnum.lsn.file == 0)
@@ -171,7 +173,6 @@ int do_ack(bdb_state_type *bdb_state, DB_LSN permlsn, uint32_t generation)
     p_buf = ack_info_data(info);
     p_buf_end = p_buf + BDB_SEQNUM_TYPE_LEN;
     rep_berkdb_seqnum_type_put(&seqnum, p_buf, p_buf_end);
-    master = bdb_state->repinfo->master_host;
 
     if (unlikely(bdb_state->rep_trace)) {
         char str[80];
@@ -414,7 +415,7 @@ void udp_prefault_all(bdb_state_type *bdb_state, unsigned int fileid,
     if (!gbl_prefault_udp)
         return;
 
-    if (repinfo->myhost != repinfo->master_host)
+    if (!bdb_i_am_master())
         return;
 
     i = net_get_all_nodes_connected(repinfo->netinfo, hosts);
@@ -749,7 +750,9 @@ int send_myseqnum_to_master_udp(bdb_state_type *bdb_state)
         info->from = 0;
         info->to = 0;
         info->type = USER_TYPE_BERKDB_NEWSEQ;
-        udp_send(bdb_state, info, bdb_state->repinfo->master_host);
+        abort();
+        char *master;
+        udp_send(bdb_state, info, master /*bdb_state->repinfo->master_host*/);
     } else {
         static time_t lastpr = 0;
         time_t now;
@@ -937,27 +940,24 @@ static int prepare_pg_compact_msg(bdb_state_type *bdb_state, ack_info *info,
 int send_pg_compact_req(bdb_state_type *bdb_state, int32_t fileid,
                         uint32_t size, const void *data)
 {
-    int rc;
-    char *master;
-    ack_info *info;
-    uint8_t *p_buf;
-    repinfo_type *repinfo;
-
     if (size > PGCOMPMAXLEN)
         return E2BIG;
 
-    repinfo = bdb_state->repinfo;
-    master = repinfo->master_host;
+    int rc;
+    repinfo_type *repinfo = bdb_state->repinfo;
 
-    if (repinfo->myhost == repinfo->master_host)
+    if (bdb_i_am_master()) {
         rc = enqueue_pg_compact_work(bdb_state, fileid, size, data);
-    else {
+    } else {
+        ack_info *info;
+        uint8_t *p_buf;
         new_ack_info(info, BDB_PGCOMP_SND_TYPE_LEN + size, repinfo->myhost);
         rc = prepare_pg_compact_msg(bdb_state, info, fileid, size, data);
 
         if (rc != 0)
             goto out;
 
+        char *master = bdb_whomaster();
         if (bdb_state->attr->page_compact_udp)
             rc = udp_send(bdb_state, info, master);
         else {
@@ -983,29 +983,22 @@ out:
 
 int send_truncate_to_master(bdb_state_type *bdb_state, unsigned file, unsigned offset)
 {
-    int timeout = 10 * 1000, rc;
-    uint8_t buf[sizeof(DB_LSN)];
-    DB_LSN trunc_lsn;
-    u_int8_t *p_buf, *p_buf_end;
-
-    if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
+    if (bdb_i_am_master()) {
         logmsg(LOGMSG_ERROR, "%s: I am the master\n", __func__);
         return -1;
     }
 
+    DB_LSN trunc_lsn;
     trunc_lsn.file = file;
     trunc_lsn.offset = offset;
 
-    p_buf = buf;
-    p_buf_end = buf + sizeof(DB_LSN);
-
+    uint8_t buf[sizeof(DB_LSN)];
+    u_int8_t *p_buf = buf;
+    u_int8_t *p_buf_end = buf + sizeof(DB_LSN);
     db_lsn_type_put(&trunc_lsn, p_buf, p_buf_end);
 
-    rc = net_send_message(
-        bdb_state->repinfo->netinfo, bdb_state->repinfo->master_host,
-        USER_TYPE_TRUNCATE_LOG, p_buf, sizeof(DB_LSN), 1, timeout);
-
-    return rc;
+    int timeout = 10 * 1000;
+    return net_send_message(bdb_state->repinfo->netinfo, bdb_whomaster(), USER_TYPE_TRUNCATE_LOG, p_buf, sizeof(DB_LSN), 1, timeout);
 }
 
 const char *get_hostname_with_crc32(bdb_state_type *bdb_state,

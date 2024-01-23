@@ -2043,8 +2043,7 @@ int abort_logical_transaction(bdb_state_type *bdb_state, tran_type *tran,
     cur->close(cur, 0);
 
     rc = 0;
-    if (tran->committed_begin_record &&
-        bdb_state->repinfo->myhost == bdb_state->repinfo->master_host) {
+    if (tran->committed_begin_record && bdb_am_i_master()) {
         if (!tran->physical_tran) {
             bdb_tran_begin_phys(bdb_state, tran);
         }
@@ -2057,10 +2056,7 @@ int abort_logical_transaction(bdb_state_type *bdb_state, tran_type *tran,
         }
         if (about_to_commit) {
             tran->is_about_to_commit = 1;
-            rc = bdb_tran_commit_phys_getlsn(bdb_state, tran->physical_tran,
-                                             outlsn);
-            if (rc)
-                goto done;
+            rc = bdb_tran_commit_phys_getlsn(bdb_state, tran->physical_tran, outlsn);
         }
     }
 done:

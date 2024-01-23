@@ -618,7 +618,6 @@ static tran_type *bdb_tran_begin_logical_int(bdb_state_type *bdb_state,
 {
     tran_type *tran;
     int step;
-    int ismaster;
 
     /* One day this will change.  One day.
        We really want a bdb_env_type and a bdb_table_type.
@@ -674,13 +673,9 @@ static tran_type *bdb_tran_begin_logical_int(bdb_state_type *bdb_state,
 
     tran->got_bdb_lock = got_bdb_lock;
 
-    ismaster = (bdb_state->repinfo->myhost == bdb_state->repinfo->master_host);
-
-    if (ismaster) {
-        step = bdb_state->attr->rllist_step > 0 ? bdb_state->attr->rllist_step
-                                                : 10;
-        tran->rc_pool = pool_setalloc_init(sizeof(DBT) + MINMAX_KEY_SIZE, step,
-                                           malloc, free);
+    if (bdb_i_am_master()) {
+        step = bdb_state->attr->rllist_step > 0 ? bdb_state->attr->rllist_step : 10;
+        tran->rc_pool = pool_setalloc_init(sizeof(DBT) + MINMAX_KEY_SIZE, step, malloc, free);
         tran->rc_list = mymalloc(sizeof(DBT *) * step);
         tran->rc_locks = mymalloc(sizeof(DB_LOCK) * step);
         tran->rc_max = step;
@@ -870,7 +865,8 @@ static inline unsigned long long lag_bytes(bdb_state_type *bdb_state)
         }
     }
 
-    struct hostinfo *m = retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
+    abort();
+    struct hostinfo *m = retrieve_hostinfo(NULL);
 
     masterlsn = m->seqnum.lsn;
     if (log_compare(&minlsn, &masterlsn) >= 0)
@@ -1238,8 +1234,7 @@ tran_type *bdb_tran_begin_shadow_int(bdb_state_type *bdb_state, int tranclass,
     return tran;
 }
 
-tran_type *bdb_tran_begin_logical(bdb_state_type *bdb_state, int trak,
-                                  int *bdberr)
+tran_type *bdb_tran_begin_logical(bdb_state_type *bdb_state, int trak, int *bdberr)
 {
     uint32_t logical_lid = 0;
     int tranid = 0;
@@ -1263,13 +1258,10 @@ tran_type *bdb_tran_begin_logical(bdb_state_type *bdb_state, int trak,
 
     BDB_READLOCK("trans_start_logical");
 
-    int ismaster =
-        (bdb_state->repinfo->myhost == bdb_state->repinfo->master_host);
-
     /* If we're getting the lock, this has to be the master
      * NOTE: we don't release this lock until commit/rollback time
      */
-    if (!ismaster) {
+    if (!bdb_i_am_master()) {
         BDB_RELLOCK();
         logmsg(LOGMSG_ERROR, "Master change while getting logical tran.\n");
         bdb_state->dbenv->lock_id_free(bdb_state->dbenv, logical_lid);
@@ -1839,8 +1831,7 @@ int bdb_tran_commit_with_seqnum_int(bdb_state_type *bdb_state, tran_type *tran,
         }
 
         /* log end of transaction */
-        if (physical_tran != NULL && tran->wrote_begin_record &&
-            bdb_state->repinfo->myhost == bdb_state->repinfo->master_host) {
+        if (physical_tran != NULL && tran->wrote_begin_record && bdb_i_am_master()) {
             /* set flag telling the send routine to flush this lsn immediately
              */
 
@@ -1883,7 +1874,7 @@ int bdb_tran_commit_with_seqnum_int(bdb_state_type *bdb_state, tran_type *tran,
            the shadow data for each snapshot/serializable sql session
          */
         if (!needed_to_abort && tran->wrote_begin_record &&
-            bdb_state->repinfo->myhost == bdb_state->repinfo->master_host &&
+            bdb_i_am_master() &&
             !bdb_state->attr->shadows_nonblocking) {
 
             bdb_osql_trn_repo_lock();

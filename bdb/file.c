@@ -250,8 +250,6 @@ void set_repinfo_master_host(bdb_state_type *bdb_state, char *master,
         logmsg(LOGMSG_USER, "Setting repinfo master to %s from %s line %u\n",
                master, func, line);
     }
-    bdb_state->repinfo->master_host_interned = intern_ptr(master);
-    bdb_state->repinfo->master_host = bdb_state->repinfo->master_host_interned->str;
 
     if (master == db_eid_invalid) {
         /* whoismaster_rtn (new_master_callback) will be called when master is available */
@@ -1538,9 +1536,9 @@ static int bdb_flush_int(bdb_state_type *bdb_state, int *bdberr, int force)
         return -1;
     }
 
-    if (bdb_state->repinfo->master_host != bdb_state->repinfo->myhost)
+    if (!bdb_i_am_master()) {
         bdb_flush_cache(bdb_state);
-    else {
+    } else {
         start = comdb2_time_epochms();
         rc = ll_checkpoint(bdb_state, force);
         if (rc != 0) {
@@ -1932,12 +1930,13 @@ void get_my_lsn(bdb_state_type *bdb_state, DB_LSN *lsnout)
     memcpy(lsnout, &our_lsn, sizeof(DB_LSN));
 }
 
-void get_master_lsn(bdb_state_type *bdb_state, DB_LSN *lsnout)
+void get_master_lsn(DB_LSN *lsnout)
 {
-    char *master_host = bdb_state->repinfo->master_host;
-    if (master_host != db_eid_invalid && master_host != bdb_master_dupe) {
-        struct hostinfo *h = retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
-        memcpy(lsnout, &h->seqnum.lsn, sizeof(DB_LSN));
+    abort();
+    char *master_host = NULL;
+    if (master_host != db_eid_invalid && master_host != db_eid_dupmaster) {
+        //struct hostinfo *h = retrieve_hostinfo(master_host);
+        //memcpy(lsnout, &h->seqnum.lsn, sizeof(DB_LSN));
     }
 }
 
@@ -2033,16 +2032,13 @@ static int print_catchup_message(bdb_state_type *bdb_state, int phase,
                 doing_rep_verify = 1;
 
             if (rep_verify_lsn.file != 0) {
-                logmsg(LOGMSG_WARN, "sending COMMITDELAYMORE to %s\n",
-                        bdb_state->repinfo->master_host);
-
-                rc = net_send(bdb_state->repinfo->netinfo,
-                              bdb_state->repinfo->master_host,
+                logmsg(LOGMSG_WARN, "sending COMMITDELAYMORE to %s\n", bdb_whomaster());
+                rc = net_send(bdb_state->repinfo->netinfo, bdb_whomaster(),
                               USER_TYPE_COMMITDELAYMORE, NULL, 0, 1);
 
                 if (rc != 0) {
                     logmsg(LOGMSG_WARN, "failed to send COMMITDELAYMORE to %s rc: %d\n",
-                            bdb_state->repinfo->master_host, rc);
+                            bdb_whomaster(), rc);
                     return -1;
                 }
             }
@@ -2092,7 +2088,7 @@ static int print_catchup_message(bdb_state_type *bdb_state, int phase,
     bdb_lsn_cmp_type_put(&lsn_cmp, p_buf, p_buf_end);
 
     rc = net_send_message(bdb_state->repinfo->netinfo,
-                          bdb_state->repinfo->master_host, USER_TYPE_LSNCMP,
+                          bdb_whomaster(), USER_TYPE_LSNCMP,
                           p_lsn_cmp, sizeof(lsn_cmp_type), 1, 60 * 1000);
 
     *prev_gap = *gap;
@@ -2387,7 +2383,7 @@ static DB_ENV *dbenv_open(bdb_state_type *bdb_state)
         set_repinfo_master_host(bdb_state, db_eid_invalid, __func__, __LINE__);
     }
 
-    master_host = bdb_state->repinfo->master_host;
+    master_host = bdb_whomaster();
 
     net_set_heartbeat_check_time(bdb_state->repinfo->netinfo, 60);
 
@@ -3027,30 +3023,22 @@ if (!is_real_netinfo(bdb_state->repinfo->netinfo))
 
 /* do not proceed untill we find a master */
 waitformaster:
-    while (bdb_state->repinfo->master_host == db_eid_invalid) {
+    while (master_host == db_eid_invalid) {
         logmsg(LOGMSG_WARN, "^^^^^^^^^^^^ waiting for a master...\n");
         sleep(3);
     }
 
-    master_host = bdb_state->repinfo->master_host;
-
-    if ((master_host == db_eid_invalid) || (master_host == bdb_master_dupe))
+    if ((master_host == db_eid_invalid) || (master_host == db_eid_dupmaster))
         goto waitformaster;
 
     {
         DB_LSN our_lsn;
         DB_LOG_STAT *log_stats;
         char our_lsn_str[80];
-
-        bdb_state->dbenv->log_stat(bdb_state->dbenv, &log_stats,
-                                   DB_STAT_VERIFY);
-
+        bdb_state->dbenv->log_stat(bdb_state->dbenv, &log_stats, DB_STAT_VERIFY);
         make_lsn(&our_lsn, log_stats->st_cur_file, log_stats->st_cur_offset);
-
         free(log_stats);
-
-        print(bdb_state, "AFTER REP_START our LSN: %s\n",
-              lsn_to_str(our_lsn_str, &our_lsn));
+        print(bdb_state, "AFTER REP_START our LSN: %s\n", lsn_to_str(our_lsn_str, &our_lsn));
     }
 
     /*
@@ -3059,15 +3047,15 @@ waitformaster:
        */
 
 again2:
-    if (!gbl_skip_catchup_logic && bdb_state->repinfo->master_host != myhost) {
+    if (!gbl_skip_catchup_logic && !bdb_i_am_master()) {
         /* now loop till we are close */
-        master_host = bdb_state->repinfo->master_host;
+        master_host = bdb_whomaster();
         if (master_host == myhost)
             goto done2;
-        if ((master_host == db_eid_invalid) || (master_host == bdb_master_dupe))
+        if ((master_host == db_eid_invalid) || (master_host == db_eid_dupmaster))
             goto waitformaster;
 
-        struct hostinfo *h = retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
+        struct hostinfo *h = retrieve_hostinfo(bdb_whomaster_interned());
         memcpy(&master_seqnum, &h->seqnum, sizeof(seqnum_type));
         memcpy(&master_lsn, &master_seqnum.lsn, sizeof(DB_LSN));
 
@@ -3135,11 +3123,11 @@ done2:
             lsn_cmp_type lsn_cmp;
             uint8_t p_lsn_cmp[BDB_LSN_CMP_TYPE_LEN], *p_buf, *p_buf_end;
 
-            master_host = bdb_state->repinfo->master_host;
+            master_host = bdb_whomaster();
             if (master_host == myhost)
                 goto done3;
             if ((master_host == db_eid_invalid) ||
-                (master_host == bdb_master_dupe))
+                (master_host == db_eid_dupmaster))
                 goto waitformaster;
 
             rc = bdb_state->dbenv->log_stat(bdb_state->dbenv, &log_stats, 0);
@@ -3207,7 +3195,7 @@ done2:
 
     /* send our real seqnum to the master now.  */
 
-    if (bdb_state->repinfo->master_host != gbl_myhostname &&
+    if (!bdb_i_am_master() &&
         net_count_nodes(bdb_state->repinfo->netinfo) > 1) {
         rc = send_myseqnum_to_master(bdb_state, 1);
         if (rc != 0) {
@@ -3229,14 +3217,15 @@ done2:
       */
 
 again:
-    buf_put(&(bdb_state->repinfo->master_host), sizeof(int), p_buf, p_buf_end);
+    master_host = bdb_whomaster();
+    buf_put(&master_host, sizeof(int), p_buf, p_buf_end);
 
-    if (!gbl_skip_catchup_logic && bdb_state->repinfo->master_host != myhost) {
+    if (!gbl_skip_catchup_logic && !bdb_i_am_master()) {
 
         /* now we have the master checkpoint and WAIT for us to ack the seqnum,
            thus making sure we are actually LIVE */
         rc = net_send_message(
-            bdb_state->repinfo->netinfo, bdb_state->repinfo->master_host,
+            bdb_state->repinfo->netinfo, master_host,
             USER_TYPE_ADD_DUMMY, &tmpnode, sizeof(int), 1, 60 * 1000);
 
         /* If the master is starting, it might not have set llmeta_bdb_state
@@ -3253,7 +3242,7 @@ again:
         if (rc != 0) {
             logmsg(LOGMSG_FATAL,
                    "net_send to %s failed rc %d- failed to sync, exiting\n",
-                   bdb_state->repinfo->master_host, rc);
+                   master_host, rc);
             exit(1);
         }
     }
@@ -3262,15 +3251,15 @@ again:
     /* SUCCESS.  we are LIVE and CACHE COHERENT */
 
     /* If I'm not the master and I haven't passed rep verify, wait here. */
-    while (bdb_state->repinfo->master_host != myhost && !gbl_passed_repverify) {
+    while (!bdb_i_am_master() && !gbl_passed_repverify) {
         sleep(1);
         logmsg(LOGMSG_DEBUG, "waiting for rep_verify to complete\n");
     }
 
     /* Check again if I'm still not the master. */
-    if (bdb_state->repinfo->master_host != myhost) {
+    if (!bdb_i_am_master()) {
         rc = net_send(bdb_state->repinfo->netinfo,
-                      bdb_state->repinfo->master_host,
+                      bdb_whomaster(),
                       USER_TYPE_COMMITDELAYNONE, NULL, 0, 1);
         if (gbl_commit_delay_trace) {
             logmsg(LOGMSG_USER, "%s line %d sending COMMITDELAYNONE\n",
@@ -5551,8 +5540,6 @@ void bdb_free_cloned_handle_with_other_data_files(bdb_state_type *bdb_state)
     free(bdb_state);
 }
 
-int bdb_is_open(bdb_state_type *bdb_state) { return bdb_state->isopen; }
-
 int create_master_lease_thread(bdb_state_type *bdb_state)
 {
     pthread_t tid;
@@ -6179,14 +6166,6 @@ static bdb_state_type *bdb_open_int(
 }
 
 static pthread_once_t once_init_master_strings = PTHREAD_ONCE_INIT;
-char *bdb_master_dupe;
-static void init_eid_strings(void)
-{
-    bdb_master_dupe = intern(".master_dupe");
-    db_eid_broadcast = intern(".broadcast");
-    db_eid_invalid = intern(".invalid");
-}
-
 bdb_state_type *bdb_open_env(const char name[], const char dir[],
                              bdb_attr_type *bdb_attr,
                              bdb_callback_type *bdb_callback, void *usr_ptr,

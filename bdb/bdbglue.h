@@ -17,8 +17,14 @@
 #ifndef INCLUDED_BDBGLUE_H
 #define INCLUDED_BDBGLUE_H
 
+struct __db_lsn;
 struct bdb_state_tag;
+struct interned_string;
+
 extern struct bdb_state_tag *gbl_bdb_state;
+extern char *db_eid_broadcast;
+extern char *db_eid_dupmaster;
+extern char *db_eid_invalid;
 
 /* Acquire the write lock.  If the current thread already holds the bdb read
  * lock then it is upgraded to a write lock.  If it already holds the write
@@ -56,9 +62,15 @@ enum bdb_thr_event {
     BDBTHR_EVENT_START_RDWR = 3
 };
 
+int bdb_i_am_master(void);
+char *bdb_whomaster(void);
+struct interned_string *bdb_whomaster_interned(void);
+int bdb_am_i_coherent(void);
+int bdb_try_am_i_coherent(void);
+int bdb_valid_lease(void);
+void bdb_thread_start_rw(void);
+void bdb_thread_done_rw(void);
 void bdb_thread_event(struct bdb_state_tag *, enum bdb_thr_event);
-int bdb_am_i_coherent(struct bdb_state_tag *);
-int bdb_try_am_i_coherent(struct bdb_state_tag *);
-int bdb_is_open(struct bdb_state_tag *);
+void get_master_lsn(struct __db_lsn *);
 
 #endif /* INCLUDED_BDBGLUE_H */

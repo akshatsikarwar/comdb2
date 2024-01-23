@@ -136,8 +136,7 @@ static int start_physical_transaction(bdb_state_type *bdb_state,
         return DB_LOCK_DEADLOCK;
     }
 
-    if (!logical_tran->committed_begin_record &&
-        (bdb_state->repinfo->myhost == bdb_state->repinfo->master_host)) {
+    if (!logical_tran->committed_begin_record && bdb_i_am_master()) {
         rc = bdb_llog_start(bdb_state, logical_tran, physical_tran->tid);
         if (rc) {
             logmsg(LOGMSG_ERROR, "%s:%d begin bdb_llog_start rc %d\n", __FILE__,
@@ -193,11 +192,8 @@ int get_physical_transaction(bdb_state_type *bdb_state, tran_type *logical_tran,
     if (!logical_tran->physical_tran) {
         rc = start_physical_transaction(bdb_state, logical_tran, outtran);
         if (rc != 0) {
-            int ismaster =
-                (bdb_state->repinfo->myhost == bdb_state->repinfo->master_host);
-            if (!ismaster && !bdb_state->in_recovery) {
-                logmsg(LOGMSG_ERROR,
-                       "Master change while getting physical tran.\n");
+            if (!bdb_i_am_master() && !bdb_state->in_recovery) {
+                logmsg(LOGMSG_ERROR, "Master change while getting physical tran.\n");
                 return BDBERR_READONLY;
             }
             return rc;

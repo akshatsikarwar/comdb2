@@ -112,50 +112,32 @@ char *bdb_strerror(int error)
     }
 }
 
-extern long long time_micros(void);
-
-int bdb_amimaster(bdb_state_type *bdb_state)
+int bdb_i_am_master(void)
 {
-    /*
-    ** if (bdb_state->repinfo->master_eid ==
-    *net_get_mynode(bdb_state->repinfo->netinfo))
-    **    return 1;
-    ** else
-    **    return 0;
-    */
-
-    repinfo_type *repinfo = bdb_state->repinfo;
-    return repinfo->master_host == repinfo->myhost;
+    abort();
+    return 0;
 }
 
-char *bdb_whoismaster(bdb_state_type *bdb_state)
+char *bdb_whomaster(void)
 {
-    if (bdb_state->repinfo->master_host != db_eid_invalid)
-        return bdb_state->repinfo->master_host;
-    else
-        return NULL;
+    abort();
+    return "foo";
 }
 
-int bdb_iam_master(bdb_state_type *bdb_state)
+struct interned_string *bdb_whomaster_interned(void)
 {
-    char *master;
-    bdb_state->dbenv->get_rep_master(bdb_state->dbenv, &master, NULL, NULL);
-    return (master == bdb_state->repinfo->myhost);
+    abort();
+    return NULL;
 }
 
-int bdb_get_rep_master(bdb_state_type *bdb_state, char **master_out,
-                       uint32_t *gen, uint32_t *egen)
+int bdb_get_rep_master(bdb_state_type *bdb_state, char **master_out, uint32_t *gen, uint32_t *egen)
 {
-    return bdb_state->dbenv->get_rep_master(bdb_state->dbenv, master_out, gen,
-                                            egen);
+    return bdb_state->dbenv->get_rep_master(bdb_state->dbenv, master_out, gen, egen);
 }
 
-int bdb_get_sanc_list(bdb_state_type *bdb_state, int max_nodes,
-                      const char *nodes[REPMAX])
+int bdb_get_sanc_list(bdb_state_type *bdb_state, int max_nodes, const char *nodes[REPMAX])
 {
-
-    return net_get_sanctioned_node_list(bdb_state->repinfo->netinfo, max_nodes,
-                                        nodes);
+    return net_get_sanctioned_node_list(bdb_state->repinfo->netinfo, max_nodes, nodes);
 }
 
 int bdb_seqnum_compare(void *inbdb_state, seqnum_type *seqnum1,

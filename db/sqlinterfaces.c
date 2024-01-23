@@ -4796,7 +4796,7 @@ void sqlengine_work_appsock(struct sqlthdstate *thd, struct sqlclntstate *clnt)
         clnt->ctrl_sqlengine == SQLENG_NORMAL_PROCESS) {
         clnt->had_lease_at_begin = (thedb->master == gbl_myhostname)
                                        ? 1
-                                       : bdb_valid_lease(thedb->bdb_env);
+                                       : bdb_valid_lease();
     }
 
     /* assign this query a unique id */

@@ -13,7 +13,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
-
+#include <signal.h>
 #include <alloca.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -986,6 +986,7 @@ static void check_rd_full(struct event_info *e)
     e->rd_full = time(NULL);
     event_del(e->rd_ev);
     hprintf("SUSPENDING RD outstanding:%zumb\n", max_bytes / MB(1));
+    raise(SIGINT);
 }
 
 static void check_wr_full(struct event_info *e)

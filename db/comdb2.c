@@ -195,6 +195,7 @@ static void *purge_old_files_thread(void *arg);
 static int lrllinecmp(char *lrlline, char *cmpto);
 static void ttrap(struct timer_parm *parm);
 int clear_temp_tables(void);
+void clienthost_init(void);
 
 pthread_key_t comdb2_open_key;
 
@@ -5435,8 +5436,10 @@ static void hash_no_op_callback(hash_t *const restrict hash, plhash_event_t even
 { }
 #endif
 
-void hostinfo_init(void);
-void clienthost_init(void);
+/* intern'ed strings */
+char *db_eid_broadcast;
+char *db_eid_dupmaster;
+char *db_eid_invalid;
 
 int main(int argc, char **argv)
 {
@@ -5449,6 +5452,10 @@ int main(int argc, char **argv)
 
     /* allocate initializer first */
     comdb2ma_init(0, 0);
+
+    db_eid_broadcast = intern(".broadcast");
+    db_eid_dupmaster = intern(".master_dupe");
+    db_eid_invalid = intern(".invalid");
 
 #   ifdef COMDB2_BBCMAKE
     hash_set_global_event_callback(hash_no_op_callback);

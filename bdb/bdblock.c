@@ -410,14 +410,10 @@ static inline void bdb_get_writelock_int(bdb_state_type *bdb_state,
 
             /*
              * Abort threads waiting on logical locks.
-             * This only looks racy: while bdb_lock_desired is set, the lock
-             * code
+             * This only looks racy: while bdb_lock_desired is set, the lock code
              * returns 'deadlock' for any thread attempting to get a rowlock.
              */
-            if (gbl_rowlocks &&
-                lock_handle->repinfo->master_host !=
-                    lock_handle->repinfo->myhost &&
-                abort_waiters) {
+            if (gbl_rowlocks && !bdb_i_am_master() && abort_waiters) {
                 bdb_abort_logical_waiters(lock_handle);
             }
 

@@ -2153,6 +2153,19 @@ newsql_loop_result newsql_loop(struct sqlclntstate *clnt, CDB2SQLQUERY *sql_quer
         return NEWSQL_SUCCESS;
     }
     if (gbl_incoherent_clnt_wait > 0) {
+
+        char *thedb_whoismaster(void);
+        const char *leader0 = thedb_whoismaster();
+
+        const char *leader1 = bdb_whoismaster(thedb->bdb_env);
+
+        extern struct timeval last_elect_time;
+        struct timeval now, diff;
+        gettimeofday(&now, NULL);
+        timersub(&now, &last_elect_time, &diff);
+
+        printf("%s leader0:%s leader1:%s last:%ldms\n", __func__, leader0, leader1, diff.tv_sec * 1000 + diff.tv_usec / 1000);
+
         if (bdb_whoismaster(thedb->bdb_env) == NULL) return NEWSQL_NO_LEADER;
         if (leader_is_new()) return NEWSQL_NEW_LEADER;
     }

@@ -77,6 +77,7 @@ struct newsql_appdata_evbuffer {
     NEWSQL_APPDATA_COMMON /* Must be first */
 
     int fd;
+    struct timeval rd_payload_time;
     struct event_base *base;
     struct event *cleanup_ev;
     struct newsqlheader hdr;
@@ -430,6 +431,15 @@ static int ssl_check(struct newsql_appdata_evbuffer *appdata, int have_ssl)
     return 2;
 }
 
+static int dispatch_client(struct newsql_appdata_evbuffer *appdata)
+{
+	struct timeval now, diff;
+	gettimeofday(&now, NULL);
+	timersub(&now, &appdata->rd_payload_time, &diff);
+	printf("%s TIME TAKEN %ldms fd:%d\n", __func__, diff.tv_sec * 1000 + diff.tv_usec / 1000, appdata->fd);
+	return dispatch_sql_query_no_wait(&appdata->clnt);
+}
+
 static void dispatch_waiting_client(int fd, short what, void *data)
 {
     struct dispatch_sql_arg *d = data;
@@ -444,7 +454,7 @@ static void dispatch_waiting_client(int fd, short what, void *data)
     if (!bdb_am_i_coherent(thedb->bdb_env)) {
         logmsg(LOGMSG_USER, "%s: new query on incoherent node, dropping socket fd:%d\n", __func__, appdata->fd);
         newsql_cleanup(appdata);
-    } else if (dispatch_sql_query_no_wait(&appdata->clnt) != 0) {
+    } else if (dispatch_client(appdata) != 0) {
         newsql_cleanup(appdata);
     }
     free(d);
@@ -515,7 +525,7 @@ static void wait_for_leader(struct newsql_appdata_evbuffer *appdata, newsql_loop
         Pthread_mutex_unlock(&dispatch_lk);
         event_free(d->ev);
         free(d);
-        if (dispatch_sql_query_no_wait(&appdata->clnt) != 0) {
+        if (dispatch_client(appdata) != 0) {
             newsql_cleanup(appdata);
         }
         return;
@@ -790,6 +800,7 @@ payload:
         }
         evbuffer_drain(appdata->rd_buf, len);
     }
+    gettimeofday(&appdata->rd_payload_time, NULL);
     process_newsql_payload(appdata, query);
 }
 
