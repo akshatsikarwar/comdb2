@@ -5333,14 +5333,10 @@ static void handle_resume_sc()
      * done every time the master changes, but on startup the low level meta
      * table wasn't open yet so we couldn't check to see if a schema change was
      * in progress */
-    if (bdb_attr_get(thedb->bdb_attr, BDB_ATTR_SC_RESUME_AUTOCOMMIT) &&
-        thedb->master == gbl_myhostname) {
-        int irc = resume_schema_change();
-        if (irc)
-            logmsg(LOGMSG_ERROR, 
-                    "failed trying to resume schema change, "
-                    "if one was in progress it will have to be restarted\n");
-    }
+    if (!bdb_attr_get(thedb->bdb_attr, BDB_ATTR_SC_RESUME_AUTOCOMMIT) || thedb->master != gbl_myhostname) return;
+    if (resume_schema_change() == 0) return;
+    logmsg(LOGMSG_ERROR,
+           "failed trying to resume schema change, if one was in progress it will have to be restarted\n");
 }
 
 static void goodbye()
@@ -5399,6 +5395,10 @@ static void hash_no_op_callback(hash_t *const restrict hash, plhash_event_t even
 void hostinfo_init(void);
 void clienthost_init(void);
 
+char *db_eid_broadcast;
+char *db_eid_dupmaster;
+char *db_eid_invalid;
+
 int main(int argc, char **argv)
 {
     int rc;
@@ -5410,6 +5410,10 @@ int main(int argc, char **argv)
 
     /* allocate initializer first */
     comdb2ma_init(0, 0);
+
+    db_eid_broadcast = intern(".broadcast");
+    db_eid_dupmaster = intern(".master_dupe");
+    db_eid_invalid = intern(".invalid");
 
 #   ifdef COMDB2_BBCMAKE
     hash_set_global_event_callback(hash_no_op_callback);

@@ -49,6 +49,7 @@
 #include <list.h>
 #include <memory_sync.h>
 
+#include "bdbglue.h"
 #include "comdb2.h"
 #include "translistener.h"
 #include "prefault.h"
@@ -2901,82 +2902,129 @@ int dat_numrrns(struct ireq *iq, int *out_numrrns)
 }
 
 struct timeval last_elect_time;
-static void thedb_set_master_int(char *master)
-{
-    if (master != db_eid_invalid) {
-        gettimeofday(&last_elect_time, NULL);
-    }
-    thedb->master = master;
-    if (master == gbl_myhostname) {
-        dispatch_waiting_clients();
-    }
-}
-
 static pthread_mutex_t new_master_lk = PTHREAD_MUTEX_INITIALIZER;
-void thedb_set_master(char *master)
+
+char *thedb_whoismaster(void)
 {
-    if (gbl_create_mode) return;
     Pthread_mutex_lock(&new_master_lk);
-    char *old = thedb->master;
-    thedb_set_master_int(master);
-    logmsg(LOGMSG_USER, "%s: %s -> %s\n", __func__, old, master);
+    char *master = thedb->master;
     Pthread_mutex_unlock(&new_master_lk);
+    return master;
 }
 
-static void new_master_callback_int(void *bdb_handle, int assert_sc_clear)
+static void *do_resume_schema_change(void *arg)
 {
-    char *host;
-    uint32_t gen, egen;
-    bdb_get_rep_master(bdb_handle, &host, &gen, &egen);
-    logmsg(LOGMSG_USER, "%s:  master:%s->%s  old-gen:%d->%d  old-egen:%d->%d\n",
-           __func__, thedb->master, host, thedb->gen, gen, thedb->egen, egen);
-    if (host == db_eid_invalid) {
-        logmsg(LOGMSG_USER, "%s: skipping callback\n", __func__);
-        return;
+    struct timeval a, b, c;
+    gettimeofday(&a, NULL);
+    bdb_state_type *bdb_state = thedb->bdb_env;
+    bdb_thread_event(bdb_state, BDBTHR_EVENT_START_RDONLY);
+    BDB_READLOCK(__func__);
+    Pthread_mutex_lock(&new_master_lk);
+    int now = ATOMIC_LOAD32(gbl_master_changes);
+    intptr_t changes = (intptr_t) arg;
+    if (now == changes && bdb_amimaster(bdb_state)) {
+        logmsg(LOGMSG_USER, "%s running -- changes:%"PRIdPTR" now:%d\n", __func__, changes, now);
+        Pthread_mutex_unlock(&new_master_lk);
+        if (resume_schema_change()) {
+            logmsg(LOGMSG_ERROR,
+                  "failed trying to resume schema change, if one was in progress it will have to be restarted\n");
+        }
+    } else {
+        logmsg(LOGMSG_USER, "%s skipping -- changes:%"PRIdPTR" now:%d master:%s\n",
+               __func__, changes, now, YESNO(bdb_amimaster(bdb_state)));
+        Pthread_mutex_unlock(&new_master_lk);
     }
-    char *oldmaster = thedb->master;
-    thedb_set_master_int(host);
+    BDB_RELLOCK();
+    bdb_thread_event(bdb_state, BDBTHR_EVENT_DONE_RDONLY);
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("%s took %lds.%ldms\n", __func__, c.tv_sec, c.tv_usec / 1000);
+    return NULL;
+}
+
+static void set_leader(bdb_state_type *bdb_handle, char *new_leader)
+{
+    uint32_t gen, egen, old_gen, old_egen;
+    gen = egen = old_gen = old_egen = 0;
+    char *old_leader = thedb->master;
+    if (!new_leader) {
+        bdb_get_rep_master(bdb_handle, &new_leader, &gen, &egen);
+        old_gen = thedb->gen;
+        old_egen = thedb->egen;
+    }
+    set_repinfo_master(new_leader, __func__);
+    thedb->master = new_leader;
     thedb->egen = egen;
     thedb->gen = gen;
-    ATOMIC_ADD32(gbl_master_changes, 1);
-    if (assert_sc_clear) {
-        bdb_assert_wrlock(bdb_handle, __func__, __LINE__);
-        if (oldmaster == gbl_myhostname && host != gbl_myhostname) {
-            sc_assert_clear(__func__, __LINE__);
-        }
+    if (gbl_create_mode
+        || new_leader == db_eid_invalid
+        || new_leader == db_eid_dupmaster
+        || (old_leader == new_leader && old_gen == gen && old_egen == egen)
+    ){
+        if (!gbl_create_mode)
+            logmsg(LOGMSG_USER, "%s: skipping leader:%s gen:%d egen:%d\n",
+                   __func__, new_leader, gen, egen);
+        return;
     }
-    if (host == gbl_myhostname) {
-        trigger_clear_hash();
-        if (oldmaster != host) {
-            logmsg(LOGMSG_USER, "I AM NEW MASTER NODE %s\n", host);
-            if (gbl_ready && resume_schema_change()) {
-                logmsg(LOGMSG_ERROR, "failed trying to resume schema change, if one was in progress it will have to be restarted\n");
-            }
-            load_auto_analyze_counters();
-            XCHANGE32(gbl_trigger_timepart, 1);
-        }
-        ctrace("I AM NEW MASTER NODE %s\n", host);
+    gettimeofday(&last_elect_time, NULL);
+    intptr_t changes = ATOMIC_ADD32(gbl_master_changes, 1);
+    logmsg(LOGMSG_USER, "%s: leader:%s->%s gen:%d->%d egen:%d->%d #changes:%"PRIdPTR"\n",
+           __func__, old_leader, new_leader, old_gen, gen, old_egen, egen, changes);
+    trigger_clear_hash();
+    if (new_leader == gbl_myhostname) {
+        dispatch_waiting_clients();
+        logmsg(LOGMSG_USER, "I AM NEW MASTER NODE %s\n", new_leader);
+        load_auto_analyze_counters();
+        XCHANGE32(gbl_trigger_timepart, 1);
         gbl_master_changed_oldfiles = 1;
-    } else {
-        if (oldmaster != host) {
-            logmsg(LOGMSG_USER, "NEW MASTER NODE %s\n", host);
+        if (gbl_ready) {
+            pthread_t t;
+            Pthread_create(&t, NULL, do_resume_schema_change, (void *)changes);
+            pthread_detach(t);
         }
+        ctrace("I AM NEW MASTER NODE %s\n", new_leader);
+    } else {
+        logmsg(LOGMSG_USER, "NEW MASTER NODE %s\n", new_leader);
         osql_repository_cancelall();
     }
     if (!gbl_exit && comdb2_ipc_master_set) {
-        comdb2_ipc_master_set(host);
+        comdb2_ipc_master_set(new_leader);
     }
     gbl_lost_master_time = 0;
     osql_checkboard_for_each(thedb->master, osql_checkboard_master_changed);
 }
 
-static int new_master_callback(void *bdb_handle, char *host, int assert_sc_clear)
+static void timed_set_leader(bdb_state_type *bdb_state, char *new_leader)
 {
-    if (gbl_create_mode) return 0;
-    Pthread_mutex_lock(&new_master_lk);
-    new_master_callback_int(bdb_handle, assert_sc_clear);
-    Pthread_mutex_unlock(&new_master_lk);
-    return 0;
+    struct timeval a, b, c;
+    gettimeofday(&a, NULL);
+    if (BDB_TRYREADLOCK(__func__) == 0) {
+        Pthread_mutex_lock(&new_master_lk);
+        set_leader(bdb_state, new_leader);
+        Pthread_mutex_unlock(&new_master_lk);
+        BDB_RELLOCK();
+    } else {
+        printf("%s *********************** nope\n", __func__);
+    }
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("set_leader took %lds.%ldms\n", c.tv_sec, c.tv_usec / 1000);
+    //if (c.tv_sec) abort();
+}
+
+void set_new_leader(bdb_state_type *bdb_state)
+{
+    timed_set_leader(bdb_state, NULL);
+}
+
+void set_myself_as_leader(bdb_state_type *bdb_state)
+{
+    timed_set_leader(bdb_state, gbl_myhostname);
+}
+
+void set_invalid_leader(bdb_state_type *bdb_state)
+{
+    timed_set_leader(bdb_state, db_eid_invalid);
 }
 
 static int threaddump_callback(void)
@@ -3628,43 +3676,27 @@ int open_bdb_env(struct dbenv *dbenv)
     bdb_attr_set(dbenv->bdb_attr, BDB_ATTR_CACHESIZE, dbenv->cacheszkb);
     bdb_attr_set(dbenv->bdb_attr, BDB_ATTR_CREATEDBS, gbl_create_mode);
     bdb_attr_set(dbenv->bdb_attr, BDB_ATTR_FULLRECOVERY, gbl_fullrecovery);
-
-    bdb_attr_set(dbenv->bdb_attr, BDB_ATTR_REPALWAYSWAIT,
-                 dbenv->rep_always_wait);
-
+    bdb_attr_set(dbenv->bdb_attr, BDB_ATTR_REPALWAYSWAIT, dbenv->rep_always_wait);
     bdb_attr_set(dbenv->bdb_attr, BDB_ATTR_DTASTRIPE, gbl_dtastripe);
     bdb_attr_set(dbenv->bdb_attr, BDB_ATTR_BLOBSTRIPE, gbl_blobstripe);
 
     backend_update_sync(dbenv);
 
     /* set callbacks */
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_WHOISMASTER,
-                     new_master_callback);
     bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_NODEUP, nodeup_callback);
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_GETROOM,
-                     getroom_callback);
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_APPSOCK,
-                     appsock_callback);
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_ADMIN_APPSOCK,
-                     admin_appsock_callback);
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_PRINT,
-                     (BDB_CALLBACK_FP)vctrace);
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_ELECTSETTINGS,
-                     electsettings_callback);
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_THREADDUMP,
-                     threaddump_callback);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_GETROOM, getroom_callback);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_APPSOCK, appsock_callback);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_ADMIN_APPSOCK, admin_appsock_callback);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_PRINT, (BDB_CALLBACK_FP)vctrace);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_ELECTSETTINGS, electsettings_callback);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_THREADDUMP, threaddump_callback);
     bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_SCDONE, scdone_callback);
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_SCABORT,
-                     schema_change_abort_callback);
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_NODE_IS_DOWN,
-                     (BDB_CALLBACK_FP)osql_checkboard_check_down_nodes);
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_SERIALCHECK,
-                     serial_check_callback);
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_SYNCMODE,
-                     syncmode_callback);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_SCABORT, schema_change_abort_callback);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_NODE_IS_DOWN, (BDB_CALLBACK_FP)osql_checkboard_check_down_nodes);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_SERIALCHECK, serial_check_callback);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_SYNCMODE, syncmode_callback);
 #if 0
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_CATCHUP, 
-            catchup_callback);
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_CATCHUP, catchup_callback);
 #endif
 
     if (dbenv->sibling_hostname[0] == NULL)

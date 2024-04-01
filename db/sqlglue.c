@@ -9863,7 +9863,7 @@ static int recover_deadlock_flags_int(bdb_state_type *bdb_state,
         if (!sleepms)
             sleepms = 2000;
 
-        logmsg(LOGMSG_ERROR, "THD %p:recover_deadlock, and lock desired\n", (void *)pthread_self());
+        logmsg(LOGMSG_USER, "THD %p:recover_deadlock, and lock desired\n", (void *)pthread_self());
     } else if (ptrace)
         logmsg(LOGMSG_INFO, "THD %p:recover_deadlock\n", (void *)pthread_self());
 
@@ -12984,8 +12984,6 @@ int clnt_check_bdb_lock_desired(struct sqlclntstate *clnt)
 
     if (!thd || !bdb_lock_desired(thedb->bdb_env))
         return 0;
-
-    logmsg(LOGMSG_WARN, "bdb_lock_desired so calling recover_deadlock\n");
 
     /* scale by number of times we try, cap at 10 seconds */
     int sleepms = 100 * clnt->deadlock_recovered;

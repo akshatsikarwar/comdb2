@@ -18,6 +18,10 @@
 #define INCLUDED_BDBGLUE_H
 
 struct bdb_state_tag;
+
+extern char *db_eid_broadcast;
+extern char *db_eid_dupmaster;
+extern char *db_eid_invalid;
 extern struct bdb_state_tag *gbl_bdb_state;
 
 /* Acquire the write lock.  If the current thread already holds the bdb read

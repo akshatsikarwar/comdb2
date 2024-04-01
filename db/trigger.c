@@ -258,14 +258,10 @@ int trigger_unregister_node(const char *host)
 void trigger_clear_hash()
 {
     Pthread_mutex_lock(&trighash_lk);
-    ATOMIC_ADD32(gbl_master_changes, 1);
     hash_t *old = trigger_hash;
     trigger_hash = NULL;
     Pthread_mutex_unlock(&trighash_lk);
-
-    if (old == NULL)
-        return;
-
+    if (old == NULL) return;
     unsigned int bkt;
     void *ent;
     trigger_info_t *prev = NULL;

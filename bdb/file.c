@@ -72,6 +72,7 @@
 
 #include <net.h>
 #include <cheapstack.h>
+#include <bdb_api.h>
 #include "bdb_int.h"
 #include "locks.h"
 #include "locks_wrap.h"
@@ -109,6 +110,7 @@
 #include <phys_rep_lsn.h>
 
 extern int gbl_bdblock_debug;
+extern int gbl_create_mode;
 extern int gbl_keycompr;
 extern int gbl_early;
 extern int gbl_exit;
@@ -241,23 +243,11 @@ extern pthread_mutex_t bdb_gbl_recoverable_lsn_mutex;
 extern DB_LSN bdb_gbl_recoverable_lsn;
 extern int32_t bdb_gbl_recoverable_timestamp;
 
-void set_repinfo_master_host(bdb_state_type *bdb_state, char *master,
-                             const char *func, uint32_t line)
+void set_repinfo_master(const char *host, const char *caller)
 {
-    if (bdb_state->parent)
-        bdb_state = bdb_state->parent;
-
-    if (bdb_state->attr->set_repinfo_master_trace) {
-        logmsg(LOGMSG_USER, "Setting repinfo master to %s from %s line %u\n",
-               master, func, line);
-    }
-    bdb_state->repinfo->master_host_interned = intern_ptr(master);
-    bdb_state->repinfo->master_host = bdb_state->repinfo->master_host_interned->str;
-
-    if (master == db_eid_invalid) {
-        /* whoismaster_rtn (new_master_callback) will be called when master is available */
-        thedb_set_master(db_eid_invalid);
-    }
+    if (strcmp(caller, "set_leader") != 0) abort();
+    gbl_bdb_state->repinfo->master_host_interned = intern_ptr(host);
+    gbl_bdb_state->repinfo->master_host = gbl_bdb_state->repinfo->master_host_interned->str;
 }
 
 static void bdb_checkpoint_list_delete_log(int filenum)
@@ -1958,7 +1948,7 @@ void get_my_lsn(bdb_state_type *bdb_state, DB_LSN *lsnout)
 void get_master_lsn(bdb_state_type *bdb_state, DB_LSN *lsnout)
 {
     char *master_host = bdb_state->repinfo->master_host;
-    if (master_host != db_eid_invalid && master_host != bdb_master_dupe) {
+    if (master_host != db_eid_invalid && master_host != db_eid_dupmaster) {
         struct hostinfo *h = retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
         memcpy(lsnout, &h->seqnum.lsn, sizeof(DB_LSN));
     }
@@ -2385,9 +2375,7 @@ static DB_ENV *dbenv_open(bdb_state_type *bdb_state)
     int rc;
     int startasmaster;
     int flags;
-    char *master_host;
     char txndir[100];
-    int count;
     DB_LSN master_lsn;
     DB_LSN our_lsn;
     DB_LOG_STAT *log_stats;
@@ -2397,26 +2385,20 @@ static DB_ENV *dbenv_open(bdb_state_type *bdb_state)
     int catchup_state = 0;
     DB_LSN starting_lsn;
     int starting_time;
-    char *myhost;
     int is_early;
-
-    count = 0;
+    int count = 0;
+    char *myhost = net_get_mynode(bdb_state->repinfo->netinfo);
 
     bb_berkdb_thread_stats_init();
-    myhost = net_get_mynode(bdb_state->repinfo->netinfo);
 
-    if (!is_real_netinfo(bdb_state->repinfo->netinfo) ||
-        bdb_state->attr->i_am_master) {
-        /*fprintf(stderr, "we will start as master of fake replication
-         * group\n");*/
+    if (!is_real_netinfo(bdb_state->repinfo->netinfo) || bdb_state->attr->i_am_master) {
         startasmaster = 1;
-        set_repinfo_master_host(bdb_state, myhost, __func__, __LINE__);
+        myhost = gbl_myhostname;
+        set_myself_as_leader(bdb_state);
     } else {
         startasmaster = 0;
-        set_repinfo_master_host(bdb_state, db_eid_invalid, __func__, __LINE__);
+        set_invalid_leader(bdb_state);
     }
-
-    master_host = bdb_state->repinfo->master_host;
 
     /* Create the environment handle. */
     rc = db_env_create(&dbenv, 0);
@@ -2939,13 +2921,7 @@ static DB_ENV *dbenv_open(bdb_state_type *bdb_state)
         }
     }
 
-/* skip all the replication stuff if we dont have a network */
-/*
-if (!is_real_netinfo(bdb_state->repinfo->netinfo))
-   goto end;
-   */
-
-/* limit amount we retrans in one shot */
+    /* limit amount we retrans in one shot */
     rc = dbenv->set_rep_limit(dbenv, 0, bdb_state->attr->replimit);
     if (rc != 0) {
         logmsg(LOGMSG_FATAL, "%s: dbenv->set_rep_limit(%u) %d %s\n", __func__,
@@ -2992,21 +2968,15 @@ if (!is_real_netinfo(bdb_state->repinfo->netinfo))
                __LINE__);
         rc = dbenv->rep_start(dbenv, NULL, 0, DB_REP_MASTER);
         if (rc != 0) {
-            logmsg(LOGMSG_ERROR, "dbenv_open: rep_start as master failed %d %s\n",
-                    rc, db_strerror(rc));
+            logmsg(LOGMSG_ERROR, "dbenv_open: rep_start as master failed %d %s\n", rc, db_strerror(rc));
             return NULL;
         }
         print(bdb_state, "dbenv_open: started rep as MASTER\n");
-    } else /* we start as a client */
-    {
-        /*fprintf(stderr, "dbenv_open: starting rep as client\n");*/
-        logmsg(LOGMSG_USER,
-               "%s line %d calling rep_start as client with egen 0\n", __func__,
-               __LINE__);
+    } else {
+        logmsg(LOGMSG_USER, "%s line %d calling rep_start as client with egen 0\n", __func__, __LINE__);
         rc = dbenv->rep_start(dbenv, NULL, 0, DB_REP_CLIENT);
         if (rc != 0) {
-            logmsg(LOGMSG_ERROR, "dbenv_open: rep_start as client failed %d %s\n",
-                    rc, db_strerror(rc));
+            logmsg(LOGMSG_ERROR, "dbenv_open: rep_start as client failed %d %s\n", rc, db_strerror(rc));
             return NULL;
         }
         print(bdb_state, "dbenv_open: started rep as CLIENT\n");
@@ -3019,64 +2989,38 @@ if (!is_real_netinfo(bdb_state->repinfo->netinfo))
     }
     bdb_state->rep_started = 1;
 
-    /*
-      fprintf(stderr, "\n\n################################ back from
-      rep_start\n\n\n");
-    */
-
     pthread_attr_t attr;
     Pthread_attr_init(&attr);
     Pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     Pthread_attr_setstacksize(&attr, 1024 * 1024);
-
-    /* create the watcher thread */
     logmsg(LOGMSG_DEBUG, "creating the watcher thread\n");
-    rc = pthread_create(&(bdb_state->watcher_thread), &attr, watcher_thread,
-                        bdb_state);
-    if (rc != 0) {
-        logmsg(LOGMSG_ERROR, "couldnt create watcher thread\n");
-        return NULL;
-    }
-
+    Pthread_create(&(bdb_state->watcher_thread), &attr, watcher_thread, bdb_state);
     Pthread_attr_destroy(&attr);
 
     if (0) {
         pthread_t lwm_printer_tid;
-        rc = pthread_create(&lwm_printer_tid, NULL, lwm_printer_thd, bdb_state);
-        if (rc) {
-            logmsg(LOGMSG_DEBUG, "start lwm printer thread rc %d\n", rc);
-            return NULL;
-        }
+        Pthread_create(&lwm_printer_tid, NULL, lwm_printer_thd, bdb_state);
     }
 
-/*sleep(2); this is not needed anymore */
-
-/* do not proceed untill we find a master */
 waitformaster:
     while (bdb_state->repinfo->master_host == db_eid_invalid) {
         logmsg(LOGMSG_WARN, "^^^^^^^^^^^^ waiting for a master...\n");
-        sleep(3);
+        sleep(1);
     }
 
-    master_host = bdb_state->repinfo->master_host;
+    char *master_host = bdb_state->repinfo->master_host;
 
-    if ((master_host == db_eid_invalid) || (master_host == bdb_master_dupe))
+    if ((master_host == db_eid_invalid) || (master_host == db_eid_dupmaster))
         goto waitformaster;
 
     {
         DB_LSN our_lsn;
         DB_LOG_STAT *log_stats;
         char our_lsn_str[80];
-
-        bdb_state->dbenv->log_stat(bdb_state->dbenv, &log_stats,
-                                   DB_STAT_VERIFY);
-
+        bdb_state->dbenv->log_stat(bdb_state->dbenv, &log_stats, DB_STAT_VERIFY);
         make_lsn(&our_lsn, log_stats->st_cur_file, log_stats->st_cur_offset);
-
         free(log_stats);
-
-        print(bdb_state, "AFTER REP_START our LSN: %s\n",
-              lsn_to_str(our_lsn_str, &our_lsn));
+        print(bdb_state, "AFTER REP_START our LSN: %s\n", lsn_to_str(our_lsn_str, &our_lsn));
     }
 
     /*
@@ -3090,7 +3034,7 @@ again2:
         master_host = bdb_state->repinfo->master_host;
         if (master_host == myhost)
             goto done2;
-        if ((master_host == db_eid_invalid) || (master_host == bdb_master_dupe))
+        if ((master_host == db_eid_invalid) || (master_host == db_eid_dupmaster))
             goto waitformaster;
 
         struct hostinfo *h = retrieve_hostinfo(bdb_state->repinfo->master_host_interned);
@@ -3166,7 +3110,7 @@ done2:
             if (master_host == myhost)
                 goto done3;
             if ((master_host == db_eid_invalid) ||
-                (master_host == bdb_master_dupe))
+                (master_host == db_eid_dupmaster))
                 goto waitformaster;
 
             rc = bdb_state->dbenv->log_stat(bdb_state->dbenv, &log_stats, 0);
@@ -5083,26 +5027,6 @@ end:
     return outrc;
 }
 
-static void whoismaster_rtn(bdb_state_type *bdb_state, int sc_clear)
-{
-    if (!bdb_state->callback->whoismaster_rtn) return;
-    bdb_state->callback->whoismaster_rtn(bdb_state, bdb_state->repinfo->master_host, sc_clear); /* new_master_callback */
-}
-
-void bdb_setmaster(bdb_state_type *bdb_state, char *host)
-{
-    BDB_READLOCK("bdb_setmaster");
-
-    if (bdb_state->parent)
-        bdb_state = bdb_state->parent;
-
-    set_repinfo_master_host(bdb_state, host, __func__, __LINE__);
-
-    BDB_RELLOCK();
-
-    whoismaster_rtn(bdb_state, 0);
-}
-
 void bdb_set_read_only(bdb_state_type *bdb_state)
 {
     bdb_state_type *child;
@@ -5133,29 +5057,22 @@ void bdb_set_read_only(bdb_state_type *bdb_state)
 static int bdb_downgrade_int(bdb_state_type *bdb_state, int noelect,
                              int *downgraded)
 {
-    int rc;
-    int outrc;
+    int outrc = 0;
 
-    outrc = 0;
-    if (downgraded)
-        *downgraded = 0;
+    if (downgraded) *downgraded = 0;
 
     if (!bdb_state->repinfo->upgrade_allowed) {
-        logmsg(LOGMSG_DEBUG, "bdb_downgrade: not allowed (bdb_open has not "
-                             "completed yet)\n");
+        logmsg(LOGMSG_DEBUG, "bdb_downgrade: not allowed (bdb_open has not completed yet)\n");
         return 0;
     }
 
-    /* if we were passed a child, find his parent */
-    if (bdb_state->parent)
-        bdb_state = bdb_state->parent;
+    if (bdb_state->parent) bdb_state = bdb_state->parent;
 
     bdb_set_read_only(bdb_state);
 
     /* now become a client of the replication group */
-    logmsg(LOGMSG_USER, "%s line %d calling rep_start as client with egen 0\n",
-           __func__, __LINE__);
-    rc = bdb_state->dbenv->rep_start(bdb_state->dbenv, NULL, 0, DB_REP_CLIENT);
+    logmsg(LOGMSG_USER, "%s line %d calling rep_start as client with egen 0\n", __func__, __LINE__);
+    int rc = bdb_state->dbenv->rep_start(bdb_state->dbenv, NULL, 0, DB_REP_CLIENT);
     if (rc != 0) {
         logmsg(LOGMSG_ERROR, "rep_start as client failed\n");
         outrc = 1;
@@ -5165,21 +5082,18 @@ static int bdb_downgrade_int(bdb_state_type *bdb_state, int noelect,
 
     logmsg(LOGMSG_DEBUG, "back from rep_start\n");
 
-    if (downgraded)
-        *downgraded = 1;
+    if (downgraded) *downgraded = 1;
 
-    if (!noelect)
-        call_for_election_and_lose(bdb_state, __func__, __LINE__);
+    if (!noelect) call_for_election_and_lose(bdb_state, __func__, __LINE__);
 
-    logmsg(LOGMSG_ERROR, "%s returning\n", __func__);
+    logmsg(LOGMSG_DEBUG, "%s returning\n", __func__);
     return outrc;
 }
 
 void defer_commits_for_upgrade(bdb_state_type *bdb_state, const char *host,
                                const char *func);
 
-static int bdb_upgrade_int(bdb_state_type *bdb_state, uint32_t newgen,
-                           int *upgraded)
+static int bdb_upgrade_int(bdb_state_type *bdb_state, uint32_t newgen, int *upgraded)
 {
     int rc;
     int outrc;
@@ -5209,11 +5123,8 @@ static int bdb_upgrade_int(bdb_state_type *bdb_state, uint32_t newgen,
            set the master ! which unlocks the bdb_open_env or open_bdb_env,
            and db comes up finally.
         */
-        logmsg(LOGMSG_USER,
-               "%s line %d calling rep_start as master with egen 0\n", __func__,
-               __LINE__);
-        rc = bdb_state->dbenv->rep_start(bdb_state->dbenv, NULL, newgen,
-                                         DB_REP_MASTER);
+        logmsg(LOGMSG_USER, "%s line %d calling rep_start as master with egen 0\n", __func__, __LINE__);
+        rc = bdb_state->dbenv->rep_start(bdb_state->dbenv, NULL, newgen, DB_REP_MASTER);
         if (rc != 0) {
             logmsg(LOGMSG_ERROR, "rep_start failed rc %d\n", rc);
             return -1;
@@ -5264,8 +5175,7 @@ static int bdb_upgrade_int(bdb_state_type *bdb_state, uint32_t newgen,
     bdb_unlock_children_lock(bdb_state);
     logmsg(LOGMSG_USER, "%s line %d calling rep_start as master with egen %d\n",
            __func__, __LINE__, newgen);
-    rc = bdb_state->dbenv->rep_start(bdb_state->dbenv, NULL, newgen,
-                                     DB_REP_MASTER);
+    rc = bdb_state->dbenv->rep_start(bdb_state->dbenv, NULL, newgen, DB_REP_MASTER);
     if (rc != 0) {
         logmsg(LOGMSG_ERROR, "rep_start failed rc %d\n", rc);
         return 1;
@@ -5277,15 +5187,7 @@ static int bdb_upgrade_int(bdb_state_type *bdb_state, uint32_t newgen,
 
     defer_commits_for_upgrade(bdb_state, 0, __func__);
 
-    /* notify the user that we are the master */
-    whoismaster_rtn(bdb_state, 1);
-
-    /* master cannot be incoherent, that makes no sense.
-     *
-     * Should be after the newmaster callback: the qtrap looks at
-     * thedb->master (which is set in the above newmaster callback) to
-     * determine whether we should ignore a NOTCOHERENT2 message.
-     */
+    /* master cannot be incoherent, that makes no sense. */
     if (bdb_state->not_coherent) {
         logmsg(LOGMSG_INFO, "%s: clearing not_coherent due to upgrade\n", __func__);
         bdb_state->not_coherent = 0;
@@ -5460,16 +5362,13 @@ static int bdb_upgrade_downgrade_reopen_wrap(bdb_state_type *bdb_state, int op,
 
         {
             pthread_t tid;
-
-            /* schedule a dummy add */
-            pthread_create(&tid, &(bdb_state->pthread_attr_detach),
-                           dummy_add_thread, bdb_state);
+            Pthread_create(&tid, &(bdb_state->pthread_attr_detach), dummy_add_thread, bdb_state);
         }
 
         break;
     }
 
-    whoismaster_rtn(bdb_state, 1);
+    set_new_leader(bdb_state);
     allow_sc_to_run();
     BDB_RELLOCK();
 
@@ -5509,14 +5408,12 @@ int bdb_upgrade(bdb_state_type *bdb_state, uint32_t newgen, int *done)
 
 int bdb_downgrade(bdb_state_type *bdb_state, uint32_t newgen, int *done)
 {
-    return bdb_upgrade_downgrade_reopen_wrap(bdb_state, DOWNGRADE, 5, newgen,
-                                             done);
+    return bdb_upgrade_downgrade_reopen_wrap(bdb_state, DOWNGRADE, 5, newgen, done);
 }
 
 int bdb_downgrade_noelect(bdb_state_type *bdb_state)
 {
-    return bdb_upgrade_downgrade_reopen_wrap(bdb_state, DOWNGRADE_NOELECT, 5, 0,
-                                             NULL);
+    return bdb_upgrade_downgrade_reopen_wrap(bdb_state, DOWNGRADE_NOELECT, 5, 0, NULL);
 }
 
 /* not intended to be called by anyone but elect thread */
@@ -5620,21 +5517,16 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
     int i;
     int largest;
     struct stat sb;
-    int iammaster;
-
     pthread_t dummy_tid;
     const char *tmp;
     extern unsigned gbl_blob_sz_thresh_bytes;
 
     pthread_once(&ONCE_LOCK, run_once);
 
-    iammaster = 0;
-
     if (numix > MAXINDEX) {
         logmsg(LOGMSG_ERROR,"%s: Maximum number of indexes per table exceeded."
                             "attempted - %d, Maximum - %d\n",__func__,
                             numix, MAXINDEX);
-
         *bdberr = BDBERR_EXCEEDED_INDEXES;
         return NULL;
     }
@@ -5679,6 +5571,13 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
 
     bdb_state = mymalloc(sizeof(bdb_state_type));
     bzero(bdb_state, sizeof(bdb_state_type));
+    if (bdbtype == BDBTYPE_ENV) {
+        if (gbl_bdb_state) {
+            logmsg(LOGMSG_FATAL, "%s already have gbl_bdb_state\n", __func__);
+            abort();
+        }
+        gbl_bdb_state = bdb_state;
+    }
     bdb_state->name = strdup(name);
 
     /* This is a bit of a kludge.  We use the first 32 bytes of the table name
@@ -5871,10 +5770,8 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
             sprintf(bdb_state->txndir, "%s/logs", bdb_state->dir);
             sprintf(bdb_state->tmpdir, "%s/tmp", bdb_state->dir);
         } else {
-            sprintf(bdb_state->txndir, "%s/%s.txn", bdb_state->dir,
-                    bdb_state->name);
-            sprintf(bdb_state->tmpdir, "%s/%s.tmpdbs", bdb_state->dir,
-                    bdb_state->name);
+            sprintf(bdb_state->txndir, "%s/%s.txn", bdb_state->dir, bdb_state->name);
+            sprintf(bdb_state->tmpdir, "%s/%s.tmpdbs", bdb_state->dir, bdb_state->name);
         }
 
         /* create transaction directory if we were told to and need to */
@@ -5883,10 +5780,8 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
                then create the dir */
             if (!(stat(bdb_state->txndir, &sb) == 0 &&
                   (sb.st_mode & S_IFMT) == S_IFDIR)) {
-                /* Create the directory */
                 if (mkdir(bdb_state->txndir, 0774) != 0) {
-                    print(bdb_state, "mkdir: %s: %s\n", bdb_state->txndir,
-                          strerror(errno));
+                    print(bdb_state, "mkdir: %s: %s\n", bdb_state->txndir, strerror(errno));
                     logmsg(LOGMSG_INFO, "%s failing with bdberr_misc at line %d\n", __func__, __LINE__);
                     *bdberr = BDBERR_MISC;
                     return NULL;
@@ -5896,10 +5791,8 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
         /* do this each file, even if not in create mode */
         if (!(stat(bdb_state->tmpdir, &sb) == 0 &&
               (sb.st_mode & S_IFMT) == S_IFDIR)) {
-            /* Create the directory */
             if (mkdir(bdb_state->tmpdir, 0774) != 0) {
-                print(bdb_state, "mkdir: %s: %s\n", bdb_state->tmpdir,
-                      strerror(errno));
+                print(bdb_state, "mkdir: %s: %s\n", bdb_state->tmpdir, strerror(errno));
                 logmsg(LOGMSG_INFO, "%s failing with bdberr_misc at line %d\n", __func__, __LINE__);
                 *bdberr = BDBERR_MISC;
                 return NULL;
@@ -5932,8 +5825,6 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
 
         Pthread_mutex_init(&(bdb_state->repinfo->appseqnum_lock), NULL);
 
-        gbl_bdb_state = bdb_state;
-
         /* create a blkseq db before we open the main environment,
          * since recovery routines will expect it to exist */
         if (bdb_state->attr->private_blkseq_enabled) {
@@ -5950,6 +5841,7 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
            when we come back from this call, we know if we
            are the master of our replication group
         */
+
         bdb_state->dbenv = dbenv_open(bdb_state);
         if (bdb_state->dbenv == NULL) {
             logmsg(LOGMSG_ERROR, "dbenv_open failed\n");
@@ -5971,39 +5863,13 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
               log files to the database files, allowing us to remove
               log files.
               */
-            rc = pthread_create(&(bdb_state->checkpoint_thread), &attr,
-                                checkpoint_thread, bdb_state);
-            if (rc != 0) {
-                logmsg(LOGMSG_ERROR, "unable to create checkpoint thread - rc=%d "
-                                "errno=%d %s\n",
-                        rc, errno, strerror(errno));
-                logmsg(LOGMSG_INFO, "%s failing with bdberr_misc at line %d\n", __func__, __LINE__);
-                *bdberr = BDBERR_MISC;
-                return NULL;
-            }
-
-            /*
-              create memp_trickle_thread.
-              this thread tries to keep a certain amount of memory free
-              so that a read can be done without incurring a last minute
-              write in an effort to make memory available for the read
-              */
-            rc = pthread_create(&(bdb_state->memp_trickle_thread), &attr,
-                                memp_trickle_thread, bdb_state);
-            if (rc != 0) {
-                logmsg(LOGMSG_ERROR, "unable to create memp_trickle thread - rc=%d "
-                                "errno=%d %s\n",
-                        rc, errno, strerror(errno));
-                logmsg(LOGMSG_INFO, "%s failing with bdberr_misc at line %d\n", __func__, __LINE__);
-                *bdberr = BDBERR_MISC;
-                return NULL;
-            }
+            Pthread_create(&(bdb_state->checkpoint_thread), &attr, checkpoint_thread, bdb_state);
+            Pthread_create(&(bdb_state->memp_trickle_thread), &attr, memp_trickle_thread, bdb_state);
 
             /* create the deadlock detect thread if we arent doing auto
                deadlock detection */
             if (!bdb_state->attr->autodeadlockdetect) {
-                rc = pthread_create(&dummy_tid, &attr, deadlockdetect_thread,
-                                    bdb_state);
+                Pthread_create(&dummy_tid, &attr, deadlockdetect_thread, bdb_state);
             }
 
             if (bdb_state->attr->coherency_lease) {
@@ -6019,37 +5885,23 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
               this thread periodically checks for logs older than the
               specified age, and deletes them.
               */
-            if (!is_real_netinfo(bdb_state->repinfo->netinfo))
-            /*NOTE: don't DELETE LOGS while running RECOVERY */
-            {
-
+            if (!is_real_netinfo(bdb_state->repinfo->netinfo)) {
+                /*NOTE: don't DELETE LOGS while running RECOVERY */
                 if (!gbl_fullrecovery) {
                     print(bdb_state, "will not keep logfiles\n");
-                    rc = bdb_state->dbenv->set_flags(bdb_state->dbenv,
-                                                     DB_LOG_AUTOREMOVE, 1);
+                    rc = bdb_state->dbenv->set_flags(bdb_state->dbenv, DB_LOG_AUTOREMOVE, 1);
                     if (rc != 0) {
                         logmsg(LOGMSG_ERROR, "set_flags failed\n");
                         *bdberr = BDBERR_MISC;
                         return NULL;
                     }
                 } else {
-                    print(bdb_state,
-                          "running recovery, not deleting log files\n");
+                    print(bdb_state, "running recovery, not deleting log files\n");
                 }
             } else {
-                print(bdb_state,
-                      "logfiles will be deleted in logdelete_thread\n");
-                rc = pthread_create(&(bdb_state->logdelete_thread), &attr,
-                                    logdelete_thread, bdb_state);
-                if (rc) {
-                    logmsg(LOGMSG_ERROR,
-                           "unable to create logdelete thread rc %d %s\n", rc,
-                           strerror(rc));
-                    *bdberr = BDBERR_MISC;
-                    return NULL;
-                }
+                print(bdb_state, "logfiles will be deleted in logdelete_thread\n");
+                Pthread_create(&(bdb_state->logdelete_thread), &attr, logdelete_thread, bdb_state);
             }
-
             Pthread_attr_destroy(&attr);
         }
 
@@ -6059,27 +5911,16 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
          * up read_write==0, all child bdb_states had read_write=1).
          */
         BDB_WRITELOCK("bdb_open_int");
-
         char *master;
         uint32_t gen, egen;
-
-        if (bdb_get_rep_master(bdb_state, &master, &gen, &egen) == 0 &&
-            net_get_mynode(bdb_state->repinfo->netinfo) == master) {
-            logmsg(LOGMSG_INFO, "%s:%d read_write = 1\n", __FILE__, __LINE__);
-            iammaster = 1;
-        } else
-            iammaster = 0;
-
+        int rc = bdb_get_rep_master(bdb_state, &master, &gen, &egen);
+        char *me = net_get_mynode(bdb_state->repinfo->netinfo);
+        int iammaster = (rc == 0) && (master == me);
         if (is_real_netinfo(bdb_state->repinfo->netinfo) && iammaster) {
-
-            logmsg(LOGMSG_USER,
-                   "%s line %d calling rep_start as master with egen %d\n",
-                   __func__, __LINE__, gen);
-            rc = bdb_state->dbenv->rep_start(bdb_state->dbenv, NULL, gen,
-                                             DB_REP_MASTER);
+            logmsg(LOGMSG_USER, "%s line %d calling rep_start as master with egen %d\n", __func__, __LINE__, gen);
+            rc = bdb_state->dbenv->rep_start(bdb_state->dbenv, NULL, gen, DB_REP_MASTER);
             if (rc != 0) {
-                logmsg(LOGMSG_ERROR, "rep_start as master failed %d %s\n", rc,
-                        db_strerror(rc));
+                logmsg(LOGMSG_ERROR, "rep_start as master failed %d %s\n", rc, db_strerror(rc));
             } else {
                 print(bdb_state, "bdb_open_int: started rep as MASTER\n");
             }
@@ -6090,16 +5931,12 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
          * mayhem when we tried stopping unnecessary upgrades -- SJ */
         bdb_state->read_write = iammaster ? 1 : 0;
         bdb_state->envonly = 1;
-
         bdb_state->repinfo->upgrade_allowed = 1;
 
         whoismaster_rtn(bdb_state, 1);
 
         struct hostinfo *h = retrieve_hostinfo(gbl_myhostname_interned);
-
-        logmsg(
-            LOGMSG_INFO, "@LSN %u:%u\n", h->seqnum.lsn.file, h->seqnum.lsn.offset);
-
+        logmsg(LOGMSG_INFO, "@LSN %u:%u\n", h->seqnum.lsn.file, h->seqnum.lsn.offset);
         BDB_RELLOCK();
     } else {
         /* make sure our parent came from a real bdb_open() call. */
@@ -6125,12 +5962,14 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
            values were initialised above */
 
         /* Determine our masterfulness. */
-
-        if (net_get_mynode(bdb_state->repinfo->netinfo) ==
-            bdb_state->repinfo->master_host)
-            iammaster = 1;
-        else
-            iammaster = 0;
+        int iammaster;
+        {
+        char *master;
+        uint32_t gen, egen;
+        int rc = bdb_get_rep_master(bdb_state, &master, &gen, &egen);
+        char *me = net_get_mynode(bdb_state->repinfo->netinfo);
+        iammaster = gbl_create_mode || ((rc == 0) && (master == me));
+        }
 
         /* open our databases as either a client or master */
         bdb_state->bdbtype = bdbtype;
@@ -6197,15 +6036,6 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
     return bdb_state;
 }
 
-static pthread_once_t once_init_master_strings = PTHREAD_ONCE_INIT;
-char *bdb_master_dupe;
-static void init_eid_strings(void)
-{
-    bdb_master_dupe = intern(".master_dupe");
-    db_eid_broadcast = intern(".broadcast");
-    db_eid_invalid = intern(".invalid");
-}
-
 bdb_state_type *bdb_open_env(const char name[], const char dir[],
                              bdb_attr_type *bdb_attr,
                              bdb_callback_type *bdb_callback, void *usr_ptr,
@@ -6217,8 +6047,6 @@ bdb_state_type *bdb_open_env(const char name[], const char dir[],
     if (netinfo == NULL) {
         netinfo = create_netinfo_fake();
     }
-
-    pthread_once(&once_init_master_strings, init_eid_strings);
 
     if (bdb_attr == NULL)
         bdb_attr = bdb_attr_create();

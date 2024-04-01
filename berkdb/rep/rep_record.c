@@ -1623,8 +1623,7 @@ more:
 					goto errlock;
 			} else {
 				fromline = __LINE__;
-				ret = __rep_apply(dbenv, rp, rec, ret_lsnp,
-								commit_gen, 0);
+				ret = __rep_apply(dbenv, rp, rec, ret_lsnp, commit_gen, 0);
 			}
 		} else {
 			send_master_req(dbenv, __func__, __LINE__);
@@ -6962,8 +6961,6 @@ __rep_cmp_vote2(dbenv, rep, eid, egen)
 	return (1);
 }
 
-int gbl_online_recovery_maxlocks = 0;
-
 static int
 recovery_getlocks(dbenv, lockid, lock_dbt, lsn)
 	DB_ENV *dbenv;
@@ -7024,7 +7021,6 @@ __rep_dorecovery(dbenv, lsnp, trunclsnp, online, undid_schema_change)
 	int schema_lk_count = 0;
 	int i_am_master = 0;
 	static int truncate_count = 0;
-	int maxlocks = gbl_online_recovery_maxlocks;
 	u_int32_t rectype;
 	u_int32_t keycnt = 0;
 	u_int32_t logflags = DB_LAST;
@@ -8637,8 +8633,3 @@ __rep_inflight_txns_older_than_lsn(DB_ENV *dbenv, DB_LSN *lsn)
 	Pthread_mutex_unlock(&dbenv->recover_lk);
 	return 0;
 }
-
-/* Not crazy about leaving this here.  This is used in bdb and berkdb.  It's
- * initialized in db, early in main.  It doesn't really belong in any one place. */
-char *db_eid_broadcast = NULL;
-char *db_eid_invalid = NULL;

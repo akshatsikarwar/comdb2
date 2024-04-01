@@ -446,7 +446,7 @@ static int forward_longblock_to_master(struct ireq *iq,
     struct req_hdr req_hdr;
     size_t req_len;
 
-    if (mstr == bdb_master_dupe || mstr == db_eid_invalid) {
+    if (mstr == db_eid_dupmaster || mstr == db_eid_invalid) {
         if (iq->debug)
             logmsg(LOGMSG_ERROR, "%s:no master! (%s) req from %s\n", __func__,
                    mstr, getorigin(iq));
@@ -512,7 +512,7 @@ static int forward_block_to_master(struct ireq *iq, block_state_t *p_blkstate,
     struct req_hdr req_hdr;
     size_t req_len;
 
-    if (mstr == bdb_master_dupe || mstr == db_eid_invalid) {
+    if (mstr == db_eid_dupmaster || mstr == db_eid_invalid) {
         if (iq->debug)
             logmsg(LOGMSG_ERROR, "%s:no master! (%s) req from %s\n", __func__,
                    mstr, getorigin(iq));

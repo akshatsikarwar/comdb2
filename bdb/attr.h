@@ -623,7 +623,6 @@ DEF_ATTR(DOWNGRADE_ON_SEQNUM_GEN_MISMATCH, downgrade_on_seqnum_gen_mismatch,
 DEF_ATTR(ENABLE_SEQNUM_GENERATIONS, enable_seqnum_generations, BOOLEAN, 0, NULL)
 DEF_ATTR(ELECT_ON_MISMATCHED_MASTER, elect_on_mismatched_master, BOOLEAN, 1,
          NULL)
-DEF_ATTR(SET_REPINFO_MASTER_TRACE, set_repinfo_master_trace, BOOLEAN, 0, NULL)
 DEF_ATTR(LEASEBASE_TRACE, leasebase_trace, BOOLEAN, 0, NULL)
 DEF_ATTR(MASTER_LEASE, master_lease, MSECS, 500, NULL)
 DEF_ATTR(MASTER_LEASE_RENEW_INTERVAL, master_lease_renew_interval, MSECS, 200,

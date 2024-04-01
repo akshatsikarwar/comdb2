@@ -83,7 +83,6 @@ void bdb_cursor_ser_invalidate(bdb_cursor_ser_t *cur_ser);
 
 enum {
     BDB_CALLBACK_NODEUP,
-    BDB_CALLBACK_WHOISMASTER,
     BDB_CALLBACK_REPFAIL,
     BDB_CALLBACK_APPSOCK,
     BDB_CALLBACK_PRINT,
@@ -334,16 +333,6 @@ typedef int (*SERIALCHECK)(char *tbname, int idxnum, void *key, int keylen,
   of a given node.  this is used to keep coherency within a room.
 */
 typedef int (*GETROOMFP)(bdb_state_type *bdb_handle, const char *host);
-
-/*
-  pass in a routine that will be called to tell you that someone
-  has become the master.  take whatever action necessary to get
-  updates directed to you if you are now the master or to have you
-  updates directed elesewhere if you learned of a new master.
-  do NOT call back into the bdb library from this routine.
-*/
-typedef int (*WHOISMASTERFP)(bdb_state_type *bdb_handle, char *host,
-                             int assert_sc_clear);
 
 /*
   pass in a routine that will be called when the replication
@@ -2016,11 +2005,6 @@ int bdb_recovery_start_lsn(bdb_state_type *bdb_state, char *lsnout, int lsnlen);
  * like.
  * Maintain the charade just a bit longer +---------V. */
 int bdb_recovery_set_lsn(bdb_state_type *bdb_state, char *lsn);
-/* Magic strings that correspond to no master and dupe master. BDB makes every
- * effort
- * to never use berkdb eid values, these map to DB_EID_INVALID,
- * DB_EID_BROADCAST, DB_EID_DUPMASTER */
-extern char *bdb_master_dupe, *db_eid_broadcast, *db_eid_invalid;
 
 int bdb_is_timestamp_recoverable(bdb_state_type *bdb_state, int32_t timestamp);
 
@@ -2386,12 +2370,16 @@ void fill_dbinfo(struct _CDB2DBINFORESPONSE *, bdb_state_type *);
 void fill_ssl_info(struct _CDB2DBINFORESPONSE *);
 #endif
 
-void thedb_set_master(char *);
 int bdb_queuedb_has_seq(bdb_state_type *);
 void dispatch_waiting_clients(void);
 
 struct sqlclntstate;
 int release_locks_int(const char *trace, const char *func, int line, struct sqlclntstate *);
 #define release_locks(trace) release_locks_int(trace, __func__, __LINE__, NULL)
+
+void set_repinfo_master(const char *master_host, const char *caller);
+void set_new_leader(bdb_state_type *);
+void set_myself_as_leader(bdb_state_type *);
+void set_invalid_leader(bdb_state_type *);
 
 #endif

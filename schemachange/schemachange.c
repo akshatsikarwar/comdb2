@@ -308,11 +308,11 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
     s->started = 0;
 
     if (s->resume && s->resume != SC_OSQL_RESUME && IS_ALTERTABLE(s)) {
-        if (gbl_test_sc_resume_race) {
-            logmsg(LOGMSG_INFO, "%s:%d sleeping 5s for sc_resume test\n",
-                   __func__, __LINE__);
-            sleep(5);
-        }
+        //if (gbl_test_sc_resume_race) {
+        //    logmsg(LOGMSG_INFO, "%s:%d sleeping 5s for sc_resume test\n",
+        //           __func__, __LINE__);
+        //    sleep(5);
+        //}
         ATOMIC_ADD32(gbl_sc_resume_start, 1);
     }
     /*

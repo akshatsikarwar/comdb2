@@ -499,8 +499,7 @@ int bdb_get_readlock(bdb_state_type *bdb_state, int trylock, const char *idstr, 
         lock_handle = lock_handle->parent;
 
     if (lk == NULL) {
-        logmsg(LOGMSG_FATAL, "%s/%s(%s): bdb lock not inited in this thread\n",
-                idstr, funcname, __func__);
+        logmsg(LOGMSG_FATAL, "%s/%s(%s): bdb lock not inited in this thread\n", idstr, funcname, __func__);
         abort();
     }
 
@@ -536,8 +535,7 @@ int bdb_get_readlock(bdb_state_type *bdb_state, int trylock, const char *idstr, 
     if (lk->lockref == 0) {
         lk->line = line;
         if (lk->stack) {
-            rc =
-                stack_pc_getlist(NULL, lk->stack, BDB_DEBUG_STACK, &lk->nstack);
+            rc = stack_pc_getlist(NULL, lk->stack, BDB_DEBUG_STACK, &lk->nstack);
             if (rc) {
 #ifndef _LINUX_SOURCE
                 logmsg(LOGMSG_INFO, "%s: failed to get stack %d\n", __func__, rc);
@@ -550,24 +548,17 @@ int bdb_get_readlock(bdb_state_type *bdb_state, int trylock, const char *idstr, 
     return 0;
 }
 
-void bdb_assert_wrlock(bdb_state_type *bdb_state, const char *funcname,
-                       int line)
+void bdb_assert_wrlock(bdb_state_type *bdb_state, const char *funcname, int line)
 {
     thread_lock_info_type *lk = pthread_getspecific(lock_key);
     bdb_state_type *lock_handle = bdb_state;
-
-    if (lock_handle->parent)
-        lock_handle = lock_handle->parent;
-
+    if (lock_handle->parent) lock_handle = lock_handle->parent;
     if (lk == NULL) {
-        logmsg(LOGMSG_FATAL, "%s(%s): bdb lock not inited in this thread\n",
-               funcname, __func__);
+        logmsg(LOGMSG_FATAL, "%s(%s): bdb lock not inited in this thread\n", funcname, __func__);
         abort();
     }
-
     if (lk->lockref == 0 || lk->locktype != WRITELOCK) {
-        logmsg(LOGMSG_FATAL, "%s(%s): I do not hold the writelock!\n", funcname,
-               __func__);
+        logmsg(LOGMSG_FATAL, "%s(%s): I do not hold the writelock!\n", funcname, __func__);
         abort_lk(lk);
     }
 }

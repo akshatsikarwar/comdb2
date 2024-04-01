@@ -824,8 +824,8 @@ struct dbenv {
     void *bdb_callback; /*engine callbacks */
 
     char *master; /*current master node, from callback*/
-    int gen;      /*generation for current master node*/
-    int egen;     /*election generation for current master node*/
+    uint32_t gen;      /*generation for current master node*/
+    uint32_t egen;     /*election generation for current master node*/
 
     int cacheszkb;
     int cacheszkbmin;
@@ -2513,7 +2513,6 @@ int delete_reverse_constraint(struct dbtable *db, size_t idx);
 int has_index_changed(struct dbtable *db, char *keynm, int ct_check, int newkey,
                       FILE *out, int accept_type_change);
 int resume_schema_change(void);
-
 void debug_trap(char *line, int lline);
 int ix_find_last_dup_rnum_kl(struct ireq *iq, int ixnum, void *key, int keylen,
                              void *fndkey, int *fndrrn,

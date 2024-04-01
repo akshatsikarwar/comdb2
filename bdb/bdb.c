@@ -128,10 +128,12 @@ int bdb_amimaster(bdb_state_type *bdb_state)
 
 char *bdb_whoismaster(bdb_state_type *bdb_state)
 {
-    if (bdb_state->repinfo->master_host != db_eid_invalid)
-        return bdb_state->repinfo->master_host;
-    else
+    if (bdb_state->repinfo->master_host == db_eid_invalid ||
+        bdb_state->repinfo->master_host == db_eid_dupmaster
+    ){
         return NULL;
+    }
+    return bdb_state->repinfo->master_host;
 }
 
 int bdb_iam_master(bdb_state_type *bdb_state)
@@ -141,11 +143,14 @@ int bdb_iam_master(bdb_state_type *bdb_state)
     return (master == bdb_state->repinfo->myhost);
 }
 
-int bdb_get_rep_master(bdb_state_type *bdb_state, char **master_out,
-                       uint32_t *gen, uint32_t *egen)
+int bdb_get_rep_master(bdb_state_type *bdb_state, char **master_out, uint32_t *gen, uint32_t *egen)
 {
-    return bdb_state->dbenv->get_rep_master(bdb_state->dbenv, master_out, gen,
-                                            egen);
+    if (!bdb_state || !bdb_state->dbenv) {
+        *master_out = db_eid_invalid;
+        *gen = *egen = 0;
+        return 0;
+    }
+    return bdb_state->dbenv->get_rep_master(bdb_state->dbenv, master_out, gen, egen);
 }
 
 int bdb_get_sanc_list(bdb_state_type *bdb_state, int max_nodes,

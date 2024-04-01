@@ -14,6 +14,7 @@
    limitations under the License.
  */
 
+#include <pthread.h>
 #include <unistd.h>
 #include <poll.h>
 
@@ -969,9 +970,7 @@ int resume_schema_change(void)
         return 0;
     }
     if (thedb->master != gbl_myhostname) {
-        logmsg(LOGMSG_WARN,
-               "resume_schema_change: not the master, cannot resume a"
-               " schema change\n");
+        logmsg(LOGMSG_WARN, "resume_schema_change: not the master, cannot resume a schema change\n");
         return -1;
     }
 
@@ -1147,11 +1146,7 @@ int resume_schema_change(void)
 
     if (sc_resuming) {
         pthread_t tid;
-        rc = pthread_create(&tid, &gbl_pthread_attr_detached,
-                            sc_resuming_watchdog, NULL);
-        if (rc)
-            logmsg(LOGMSG_ERROR, "%s: failed to start sc_resuming_watchdog\n",
-                   __FILE__);
+        Pthread_create(&tid, &gbl_pthread_attr_detached, sc_resuming_watchdog, NULL);
     }
     Pthread_mutex_unlock(&sc_resuming_mtx);
 

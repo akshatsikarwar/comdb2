@@ -888,7 +888,7 @@ static int osql_sock_restart(struct sqlclntstate *clnt, int maxretries,
         if (!keep_session) {
             if (gbl_master_swing_osql_verbose)
                 logmsg(LOGMSG_USER,
-                       "0x%p Starting new session rqid=%llx, uuid=%s\n",
+                       "%p Starting new session rqid=%llx, uuid=%s\n",
                        (void*)pthread_self(), clnt->osql.rqid,
                        comdb2uuidstr(clnt->osql.uuid, us));
             rc = osql_end(clnt);
@@ -900,7 +900,7 @@ static int osql_sock_restart(struct sqlclntstate *clnt, int maxretries,
         } else if (gbl_master_swing_osql_verbose) {
             snap_uid_t snap = {{0}};
             get_cnonce(clnt, &snap);
-            logmsg(LOGMSG_USER, "0x%p Restarting rqid=%llx uuid=%s against %s\n",
+            logmsg(LOGMSG_USER, "%p Restarting rqid=%llx uuid=%s against %s\n",
                    (void*)pthread_self(), clnt->osql.rqid,
                    comdb2uuidstr(clnt->osql.uuid, us), thedb->master);
         }

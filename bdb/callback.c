@@ -63,9 +63,6 @@ void bdb_callback_set(bdb_callback_type *bdb_callback, int callback_type,
     case BDB_CALLBACK_GETROOM:
         bdb_callback->getroom_rtn = callback_rtn;
         break;
-    case BDB_CALLBACK_WHOISMASTER:
-        bdb_callback->whoismaster_rtn = callback_rtn;
-        break;
     case BDB_CALLBACK_REPFAIL:
         bdb_callback->repfail_rtn = callback_rtn;
         break;

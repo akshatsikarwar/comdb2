@@ -2211,8 +2211,7 @@ int net_get_all_nodes_connected_interned(netinfo_type *netinfo_ptr, struct inter
     return count;
 }
 
-int net_get_all_nodes_connected(netinfo_type *netinfo_ptr,
-                                const char *hostlist[REPMAX])
+int net_get_all_nodes_connected(netinfo_type *netinfo_ptr, const char *hostlist[REPMAX])
 {
     host_node_type *ptr;
     int count = 0;

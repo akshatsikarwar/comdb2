@@ -678,7 +678,6 @@ struct bdb_attr_tag {
 typedef int (*BDBFP)(); /*was called FP, but that clashed with dbutil.h - sj */
 
 struct bdb_callback_tag {
-    WHOISMASTERFP whoismaster_rtn;
     NODEUPFP nodeup_rtn;
     GETROOMFP getroom_rtn;
     REPFAILFP repfail_rtn;
@@ -1727,7 +1726,6 @@ void unpack_index_odh(bdb_state_type *bdb_state, DBT *data, void *foundgenid,
                       void *dta, int dtalen, int *reqdtalen, uint8_t *ver);
 
 int bdb_reopen_inline(bdb_state_type *);
-void bdb_setmaster(bdb_state_type *bdb_state, char *host);
 int __db_check_all_btree_cursors(DB *dbp, db_pgno_t pgno);
 void __db_err(const DB_ENV *dbenv, const char *fmt, ...);
 

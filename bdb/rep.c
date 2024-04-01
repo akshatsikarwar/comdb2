@@ -25,6 +25,8 @@
 #include <unistd.h>
 #include <poll.h>
 
+#include "bdb_api.h"
+#include "bdbglue.h"
 #include "debug_switches.h"
 
 #include "bdb_int.h"
@@ -1098,9 +1100,6 @@ int is_electable(bdb_state_type *bdb_state, int *out_num_up,
 void defer_commits_for_upgrade(bdb_state_type *bdb_state, const char *host,
                                const char *func);
 
-void set_repinfo_master_host(bdb_state_type *bdb_state, char *master,
-                             const char *func, uint32_t line);
-
 /* Abort election and reset in_election flag if db is exiting. */
 static void abort_election_on_exit(bdb_state_type *bdb_state)
 {
@@ -1234,12 +1233,8 @@ elect_again:
     }
 
     if (!is_electable(bdb_state, &num, &num_connected)) {
-        logmsg(LOGMSG_USER,
-              "election will not be held, connected to %d of %d nodes\n",
-              num_connected, num);
-        print(bdb_state,
-              "election will not be held, connected to %d of %d nodes\n",
-              num_connected, num);
+        logmsg(LOGMSG_USER, "election will not be held, connected to %d of %d nodes\n", num_connected, num);
+        print(bdb_state, "election will not be held, connected to %d of %d nodes\n", num_connected, num);
 
         Pthread_mutex_lock(&(bdb_state->repinfo->elect_mutex));
         bdb_state->repinfo->in_election = 0;
@@ -1258,8 +1253,7 @@ elect_again:
        to lose unless we are currently rtcpu'd off. */
     rep_pri = REP_PRI;
     if (bdb_state->callback->nodeup_rtn) {
-        if (!(bdb_state->callback->nodeup_rtn(bdb_state,
-                                              bdb_state->repinfo->myhost))) {
+        if (!(bdb_state->callback->nodeup_rtn(bdb_state, bdb_state->repinfo->myhost))) {
             rep_pri = rep_pri - 1;
             node_not_up = 1;
         }
@@ -1267,18 +1261,15 @@ elect_again:
 
     if (gbl_elect_priority_bias && !node_not_up) {
         rep_pri = REP_PRI + gbl_elect_priority_bias;
-    } else if (gbl_use_node_pri &&
-               rep_pri ==
-                   REP_PRI) { /* if the node is up, then apply priorities. */
-        rep_pri = REP_PRI + gbl_rep_node_pri; /* priority should be > priority
-                                                 of nodes which are down.*/
+    } else if (gbl_use_node_pri && rep_pri == REP_PRI) {
+        /* if the node is up, then apply priorities. */
+        rep_pri = REP_PRI + gbl_rep_node_pri; /* priority should be > priority of nodes which are down.*/
     }
 
     if ((op == LOSE) || (op == REOPEN_AND_LOSE))
         rep_pri = 1;
 
     count = net_get_all_nodes_connected(bdb_state->repinfo->netinfo, hostlist);
-
     myhost = net_get_mynode(bdb_state->repinfo->netinfo);
     hoststring = malloc(strlen(myhost) + 2);
     hoststring[0] = '\0';
@@ -1286,31 +1277,21 @@ elect_again:
     strcat(hoststring, " ");
 
     for (i = 0; i < count; i++) {
-        hoststring =
-            realloc(hoststring, strlen(hoststring) + strlen(hostlist[i]) + 2);
+        hoststring = realloc(hoststring, strlen(hoststring) + strlen(hostlist[i]) + 2);
         strcat(hoststring, hostlist[i]);
         strcat(hoststring, " ");
     }
 
     logmsg(LOGMSG_INFO,
-           "0x%p: calling for election with cluster"
-           " of %d nodes (%d connected) : %s,  %f secs timeout and priority %d\n",
+           "%p: calling for election with cluster of %d nodes (%d connected) : %s,  %f secs timeout and priority %d\n",
            (void *)pthread_self(), elect_count, num_connected, hoststring, ((double)elect_time) / 1000000.00, rep_pri);
 
     free(hoststring);
-
-    /* we're calling for election.  if we are doing this, we don't know who the
-       master is.  ensure that master_eid isnt latched to the previous master
-       here.  */
-    set_repinfo_master_host(bdb_state, db_eid_invalid, __func__, __LINE__);
+    set_invalid_leader(bdb_state);
 
     int already_master = 0;
-
-    /* Should be holding bdb readlock .. */
     BDB_READLOCK("rep_elect");
-
-    rc = bdb_state->dbenv->rep_elect(bdb_state->dbenv, elect_count, rep_pri, elect_time, &newgen, &already_master,
-                                     &master_host);
+    rc = bdb_state->dbenv->rep_elect(bdb_state->dbenv, elect_count, rep_pri, elect_time, &newgen, &already_master, &master_host);
     BDB_RELLOCK();
 
     if (rc != 0) {
@@ -1332,27 +1313,17 @@ elect_again:
 
         goto elect_again;
     }
-    /* replace now: if i was already master, rep-start wont be called */
-    set_repinfo_master_host(bdb_state, master_host, __func__, __LINE__);
 
-    /* Berkley says we are already master.  We won't get a rep-message and
-     * shouldn't call the newmaster-callback here (which would normally set this
-     * Just set thedb->master. */
-    if (already_master) {
-        thedb_set_master(master_host);
-    }
+    set_new_leader(bdb_state);
 
     /* Check if it's us. */
     if (rc == 0) {
-
         if (master_host == bdb_state->repinfo->myhost) {
             logmsg(LOGMSG_INFO, "elect_thread: we won the election\n");
-            /* Upgrade here if we are the only participant.  Otherwise,
-             * defer upgrade until process_berkdb */
+            /* Upgrade here if we are the only participant.  Otherwise, defer upgrade until process_berkdb */
             if (elect_count == 1) {
                 rc = bdb_upgrade(bdb_state, newgen, &done);
-                print(bdb_state, "back from bdb_upgrade%s\n",
-                        (!done) ? " (nop)" : "");
+                print(bdb_state, "back from bdb_upgrade%s\n", (!done) ? " (nop)" : "");
                 if (rc != 0) {
                     logmsg(LOGMSG_FATAL, "bdb_upgrade returned bad rcode %d\n", rc);
                     exit(1);
@@ -4019,14 +3990,13 @@ static int process_berkdb(bdb_state_type *bdb_state, char *host, DBT *control, D
         }
 
         logmsg(LOGMSG_WARN,
-               "process_berkdb: DB_REP_NEWMASTER %s time=%ld upgraded to "
-               "gen=%u egen=%d\n",
+               "process_berkdb: DB_REP_NEWMASTER %s time=%ld upgraded to gen=%u egen=%d\n",
                host, time(NULL), gen, egen);
 
         /* Check if it's us. */
         if (host == bdb_state->repinfo->myhost) {
             assert(got_vote2lock);
-            logmsg(LOGMSG_WARN, "NEWMASTER is ME for GENERATION %d\n", egen);
+            logmsg(LOGMSG_WARN, "NEWMASTER is ME for GEN:%u EGEN:%u\n", gen, egen);
 
             /* I'm upgrading and this thread could be holding logical locks:
              * abort sql threads waiting on logical locks */
@@ -4054,7 +4024,7 @@ static int process_berkdb(bdb_state_type *bdb_state, char *host, DBT *control, D
             logmsg(LOGMSG_INFO, "%s:%d DB_REP_NEWMASTER during startup, ignoring\n",
                     __FILE__, __LINE__);
         } else
-            bdb_setmaster(bdb_state, host);
+            set_new_leader(bdb_state);
 
         if (gbl_dump_zero_coherency_timestamp) {
             logmsg(LOGMSG_ERROR, "%s line %d zero'ing coherency timestamp\n",
@@ -5734,7 +5704,7 @@ void *watcher_thread(void *arg)
         }
 
         /* downgrade ourselves if we are in a dupmaster situation */
-        if (master_host == bdb_master_dupe) {
+        if (master_host == db_eid_dupmaster) {
             print(bdb_state, "calling bdb_downgrade\n");
             bdb_downgrade(bdb_state, 0, NULL);
             print(bdb_state, "back from bdb_downgrade\n");
