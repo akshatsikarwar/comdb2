@@ -2707,9 +2707,7 @@ struct dbenv *newdbenv(char *dbname, char *lrlname)
     listc_init(&dbenv->sql_threads, offsetof(struct sql_thread, lnk));
     listc_init(&dbenv->sqlhist, offsetof(struct sql_hist, lnk));
 
-    thedb_set_master(db_eid_invalid);
     dbenv->errstaton = 1; /* ON */
-
     dbenv->handle_buf_queue_time = time_metric_new("handle_buf_time_in_queue");
     dbenv->sql_queue_time = time_metric_new("sql_time_in_queue");
     dbenv->service_time = time_metric_new("service_time");

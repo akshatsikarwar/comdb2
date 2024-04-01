@@ -5668,7 +5668,8 @@ void *watcher_thread(void *arg)
                     logmsg(LOGMSG_ERROR, "got %d from bdb_upgrade%s\n", rc,
                             (!done) ? " (nop)" : "");
                 } else {
-                    bdb_setmaster(bdb_state, bdb_state->repinfo->myhost);
+                    //set_myself_as_leader(bdb_state);
+                    set_new_leader(bdb_state);
                 }
             } else {
                 logmsg(LOGMSG_INFO, "%s:%d skipping upgrade since we're already the master\n",

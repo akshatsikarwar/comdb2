@@ -680,7 +680,6 @@ typedef int (*BDBFP)(); /*was called FP, but that clashed with dbutil.h - sj */
 struct bdb_callback_tag {
     NODEUPFP nodeup_rtn;
     GETROOMFP getroom_rtn;
-    REPFAILFP repfail_rtn;
     BDBAPPSOCKFP appsock_rtn;
     BDBAPPSOCKFP admin_appsock_rtn;
     PRINTFP print_rtn;

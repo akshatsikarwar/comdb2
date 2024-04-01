@@ -83,19 +83,16 @@ void bdb_cursor_ser_invalidate(bdb_cursor_ser_t *cur_ser);
 
 enum {
     BDB_CALLBACK_NODEUP,
-    BDB_CALLBACK_REPFAIL,
     BDB_CALLBACK_APPSOCK,
     BDB_CALLBACK_PRINT,
     BDB_CALLBACK_ELECTSETTINGS,
     BDB_CALLBACK_GETROOM,
     BDB_CALLBACK_CATCHUP,
     BDB_CALLBACK_THREADDUMP,
-    BDB_CALLBACK_SENDNOTCOHERENT,
     BDB_CALLBACK_GETLWM,
     BDB_CALLBACK_SETLWM,
     BDB_CALLBACK_SCDONE,
     BDB_CALLBACK_SCABORT,
-    BDB_CALLBACK_UNDOSHADOW,
     BDB_CALLBACK_NODE_IS_DOWN,
     BDB_CALLBACK_SERIALCHECK,
     BDB_CALLBACK_ADMIN_APPSOCK,
@@ -333,23 +330,6 @@ typedef int (*SERIALCHECK)(char *tbname, int idxnum, void *key, int keylen,
   of a given node.  this is used to keep coherency within a room.
 */
 typedef int (*GETROOMFP)(bdb_state_type *bdb_handle, const char *host);
-
-/*
-  pass in a routine that will be called when the replication
-  subsystem has an error communicating with a node.  reason
-  for failure will be passed into this routine.  reasons can
-  be BDB_REPFAIL_NET, BDB_REPFAIL_TIMEOUT, BDB_REPFAIL_RMTBDB
-  BDB_REPFAIL_NET indicates a network level error communicating
-  with a node.  BDB_REPFAIL_TIMEOUT indicates a timeout (as specified
-  by BDB_ATTR_REPTIMEOUT) communicating with a node.
-  BDB_REPFAIL_RMTBDB indicates that the bdb library on the remote
-  node returned failure.
-  if user requests are still being directed to a node that is
-  generating repfail events, the coherency of the data on that node
-  is at risk with being out of date with respect the the actual data
-  as it exists on the master copy of the database.
-*/
-typedef int (*REPFAILFP)(bdb_state_type *bdb_handle, char *host, int reason);
 
 /*
   pass in a routine that will handle a newly created socket.

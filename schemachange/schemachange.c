@@ -48,12 +48,18 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
     struct schema_change_type *s = iq->sc;
     int maxcancelretry = 10;
     int rc;
+    struct timeval a, b, c;
 
+
+    gettimeofday(&a, NULL);
     if (!bdb_iam_master(thedb->bdb_env)) {
         sc_errf(s, "I am not master\n");
         free_schema_change_type(s);
         return SC_NOT_MASTER;
     }
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("%s:%d %lds.%ldms\n", __func__, __LINE__, c.tv_sec, c.tv_usec / 1000);
 
     /* if we're not the master node then we can't do schema change! */
     if (thedb->master != gbl_myhostname) {
@@ -62,6 +68,8 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
         return SC_NOT_MASTER;
     }
 
+
+    gettimeofday(&a, NULL);
     if (!s->resume && s->preempted) {
         sc_errf(s, "Preempt table %s option %d\n", s->tablename, s->preempted);
         int nwait = 0;
@@ -96,6 +104,9 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
         s->finalize = 0;
         Pthread_mutex_unlock(&s->mtx);
     }
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("this if block took %lds.%ldms\n", c.tv_sec, c.tv_usec / 1000);
     if (s->kind == SC_ALTERTABLE_PENDING) {
         s->nothrevent = 0;
         s->finalize = 0;
@@ -107,6 +118,7 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
      * for shards that did not get a chance to start, but alas,
      * it is still a resume in which iq->sorese == NULL
      */
+    gettimeofday(&a, NULL);
     if (!s->resume && iq->sorese &&
         (s->kind == SC_ADDTABLE || IS_FASTINIT(s) || IS_ALTERTABLE(s))) {
         struct schema_change_type *last_sc = NULL;
@@ -211,6 +223,9 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
             }
         }
     }
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("%s:%d %lds.%ldms\n", __func__, __LINE__, c.tv_sec, c.tv_usec / 1000);
 
     strcpy(s->original_master_node, gbl_myhostname);
     unsigned long long seed = 0;
@@ -221,6 +236,8 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
                             "transactionally reuse seed 0x%llx\n",
                s->tablename, schema_change_kind(s), seed);
     } else if (s->resume) {
+
+    gettimeofday(&a, NULL);
         unsigned int host = 0;
         logmsg(LOGMSG_INFO, "Resuming schema change: fetching seed\n");
         if ((rc = fetch_sc_seed(s->tablename, thedb, &seed, &host))) {
@@ -249,6 +266,10 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
             free_schema_change_type(s);
             return SC_MASTER_DOWNGRADE;
         }
+
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("this other block line 268 %s took %lds.%ldms\n", __func__, c.tv_sec, c.tv_usec / 1000);
     } else {
         seed = bdb_get_a_genid(thedb->bdb_env);
         logmsg(LOGMSG_WARN, 
@@ -258,8 +279,13 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
     uuidstr_t us;
     comdb2uuidstr(s->uuid, us);
     s->seed = seed;
+    gettimeofday(&a, NULL);
     rc = sc_set_running(iq, s, s->tablename, s->preempted ? 2 : 1, node,
                         time(NULL), __func__, __LINE__);
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("sc_set_running took %lds.%ldms\n", c.tv_sec, c.tv_usec / 1000);
+    gettimeofday(&a, NULL);
     if (rc != 0) {
         logmsg(LOGMSG_INFO, "Failed sc_set_running %s rc %d\n", us, rc);
         if (IS_UPRECS(s) || !s->db || !s->db->doing_upgrade) {
@@ -286,9 +312,13 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
         free_schema_change_type(s);
         return SC_CANT_SET_RUNNING;
     }
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("%s:%d %lds.%ldms\n", __func__, __LINE__, c.tv_sec, c.tv_usec / 1000);
 
     logmsg(LOGMSG_INFO, "sc_set_running schemachange %s\n", us);
 
+    gettimeofday(&a, NULL);
     iq->sc_host = node ? crc32c((uint8_t *)node, strlen(node)) : 0;
     if (thedb->master == gbl_myhostname && !s->resume && iq->sc_seed != seed) {
         logmsg(LOGMSG_INFO, "Calling bdb_set_disable_plan_genid 0x%llx\n", seed);
@@ -299,6 +329,9 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
             logmsg(LOGMSG_ERROR, "Couldn't save schema change seed\n");
         }
     }
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("%s:%d %lds.%ldms\n", __func__, __LINE__, c.tv_sec, c.tv_usec / 1000);
     iq->sc_seed = seed;
 
     sc_arg_t *arg = malloc(sizeof(sc_arg_t));
@@ -307,6 +340,7 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
     arg->sc = iq->sc;
     s->started = 0;
 
+    gettimeofday(&a, NULL);
     if (s->resume && s->resume != SC_OSQL_RESUME && IS_ALTERTABLE(s)) {
         //if (gbl_test_sc_resume_race) {
         //    logmsg(LOGMSG_INFO, "%s:%d sleeping 5s for sc_resume test\n",
@@ -315,11 +349,15 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
         //}
         ATOMIC_ADD32(gbl_sc_resume_start, 1);
     }
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("%s:%d %lds.%ldms\n", __func__, __LINE__, c.tv_sec, c.tv_usec / 1000);
     /*
     ** if s->kind == SC_PARTIALUPRECS, we're going radio silent from this point
     *forward
     ** in order to produce minimal spew
     */
+    gettimeofday(&a, NULL);
     if (s->nothrevent) {
         if (s->kind != SC_PARTIALUPRECS)
             logmsg(LOGMSG_INFO, "Executing SYNCHRONOUSLY\n");
@@ -344,63 +382,59 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
             s->preempted == SC_ACTION_RESUME) {
             free(arg);
             arg = NULL;
-            rc = pthread_create(&tid, &gbl_pthread_attr_detached,
+            Pthread_create(&tid, &gbl_pthread_attr_detached,
                                 (void *(*)(void *))do_schema_change_locked, s);
         } else {
             Pthread_mutex_lock(&s->mtxStart);
-            rc = pthread_create(&tid, &gbl_pthread_attr_detached,
+            Pthread_create(&tid, &gbl_pthread_attr_detached,
                                 (void *(*)(void *))do_schema_change_tran_thd,
                                 arg);
-            if (rc == 0) {
-                while (!s->started) {
-                    Pthread_cond_wait(&s->condStart, &s->mtxStart);
-                }
+            while (!s->started) {
+                Pthread_cond_wait(&s->condStart, &s->mtxStart);
             }
             Pthread_mutex_unlock(&s->mtxStart);
         }
-        if (rc) {
-            logmsg(LOGMSG_ERROR,
-                   "start_schema_change:pthread_create rc %d %s\n", rc,
-                   strerror(errno));
-
-            Pthread_mutex_lock(&sc_async_mtx);
-            sc_async_threads--;
-            Pthread_mutex_unlock(&sc_async_mtx);
-
-            if (arg)
-                free(arg);
-            if (!s->is_osql) {
-                sc_set_running(iq, s, s->tablename, 0, gbl_myhostname,
-                               time(NULL), __func__, __LINE__);
-                free_schema_change_type(s);
-            }
-            rc = SC_ASYNC_FAILED;
-        } else {
-            rc = SC_ASYNC;
-        }
+        rc = SC_ASYNC;
     }
-
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("%s:%d %lds.%ldms\n", __func__, __LINE__, c.tv_sec, c.tv_usec / 1000);
     return rc;
 }
 
 int start_schema_change(struct schema_change_type *s)
 {
+    struct timeval a, b, c;
     struct ireq *iq = NULL;
     iq = (struct ireq *)calloc(1, sizeof(*iq));
     if (iq == NULL) {
         logmsg(LOGMSG_ERROR, "%s: failed to malloc ireq\n", __func__);
         return -1;
     }
+    gettimeofday(&a, NULL);
     init_fake_ireq(thedb, iq);
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("ireqtook %lds.%ldms\n", c.tv_sec, c.tv_usec / 1000);
     if (s->already_locked) iq->sc_locked = 1;
     iq->sc = s;
     s->iq = iq;
     if (s->db == NULL) {
+    gettimeofday(&a, NULL);
         s->db = get_dbtable_by_name(s->tablename);
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("get_dbtable took %lds.%ldms\n", c.tv_sec, c.tv_usec / 1000);
     }
     iq->usedb = s->db;
     s->usedbtablevers = s->db ? s->db->tableversion : 0;
-    return start_schema_change_tran(iq, NULL);
+
+    gettimeofday(&a, NULL);
+    int rc = start_schema_change_tran(iq, NULL);
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("start_schema_change_tran int one took %lds.%ldms\n", c.tv_sec, c.tv_usec / 1000);
+    return rc;
 }
 
 void delay_if_sc_resuming(struct ireq *iq)

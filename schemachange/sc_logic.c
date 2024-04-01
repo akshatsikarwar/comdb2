@@ -957,12 +957,14 @@ static int verify_sc_resumed_for_all_shards(void *obj, void *arg)
     return 0;
 }
 
-int resume_schema_change(void)
+int resume_schema_change_(void)
 {
     int i;
     int rc;
     int scabort = 0;
     char *abort_filename = NULL;
+
+    struct timeval a, b, c;
 
     /* if we're not the master node/phys replicant then we can't do schema
      * change! */
@@ -975,7 +977,11 @@ int resume_schema_change(void)
     }
 
     /* if a schema change is currently running don't try to resume one */
+    gettimeofday(&a, NULL);
     clear_ongoing_alter();
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("clear_ongoing_alter took %lds.%ldms\n", c.tv_sec, c.tv_usec / 1000);
 
     hash_t *tpt_sc_hash = hash_init_strcaseptr(offsetof(struct timepart_sc_resuming, viewname));
     if (!tpt_sc_hash) {
@@ -990,7 +996,15 @@ int resume_schema_change(void)
         logmsg(LOGMSG_INFO, "%s: found '%s'\n", __func__, abort_filename);
     }
 
-    Pthread_mutex_lock(&sc_resuming_mtx);
+    gettimeofday(&a, NULL);
+    if (pthread_mutex_trylock(&sc_resuming_mtx)) {
+        void pstack_self(void);
+        pstack_self();
+    }
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("sc_resuming_mtx took %lds.%ldms\n", c.tv_sec, c.tv_usec / 1000);
+    //Pthread_mutex_lock(&sc_resuming_mtx);
     sc_resuming = NULL;
     for (i = 0; i < thedb->num_dbs; ++i) {
         int bdberr;
@@ -1000,6 +1014,7 @@ int resume_schema_change(void)
         // unset downgrading flag
         thedb->dbs[i]->sc_downgrading = 0;
 
+    gettimeofday(&a, NULL);
         if (bdb_get_in_schema_change(NULL /*tran*/, thedb->dbs[i]->tablename,
                                      &packed_sc_data, &packed_sc_data_len,
                                      &bdberr) ||
@@ -1010,6 +1025,9 @@ int resume_schema_change(void)
                    thedb->dbs[i]->tablename);
             continue;
         }
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("bdb_get_in_schema_change %s took %lds.%ldms\n", thedb->dbs[i]->tablename, c.tv_sec, c.tv_usec / 1000);
 
         /* if we got some data back, that means we were in a schema change */
         if (packed_sc_data) {
@@ -1105,7 +1123,11 @@ int resume_schema_change(void)
             MEMORY_SYNC;
 
             /* start the schema change back up */
+    gettimeofday(&a, NULL);
             rc = start_schema_change(s);
+    gettimeofday(&b, NULL);
+    timersub(&b, &a, &c);
+    printf("start_schema_change took %lds.%ldms\n", c.tv_sec, c.tv_usec / 1000);
             if (rc != SC_OK && rc != SC_ASYNC) {
                 logmsg(
                     LOGMSG_ERROR,
@@ -1166,6 +1188,14 @@ int resume_schema_change(void)
     free(abort_filename);
 
     return 0;
+}
+
+int resume_schema_change(void)
+{
+    printf("in %s\n", __func__);
+    int rc = resume_schema_change_();
+    printf("out %s\n", __func__);
+    return rc;
 }
 
 /****************** Table functions ***********************************/

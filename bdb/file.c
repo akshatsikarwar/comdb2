@@ -5130,9 +5130,8 @@ static int bdb_upgrade_int(bdb_state_type *bdb_state, uint32_t newgen, int *upgr
             return -1;
         } else {
             /* special case upgrade codepath to get this set faster */
-
-            set_repinfo_master_host(bdb_state, bdb_state->repinfo->myhost,
-                                    __func__, __LINE__);
+            //thedb_set_master(bdb_state->repinfo->myhost);
+            set_new_leader(bdb_state);
         }
 
         defer_commits_for_upgrade(bdb_state, 0, __func__);
@@ -5179,13 +5178,11 @@ static int bdb_upgrade_int(bdb_state_type *bdb_state, uint32_t newgen, int *upgr
     if (rc != 0) {
         logmsg(LOGMSG_ERROR, "rep_start failed rc %d\n", rc);
         return 1;
-    } else {
-        /* special case upgrade codepath to get this set faster */
-        set_repinfo_master_host(bdb_state, bdb_state->repinfo->myhost, __func__,
-                                __LINE__);
     }
 
     defer_commits_for_upgrade(bdb_state, 0, __func__);
+    //set_myself_as_leader(bdb_state);
+    set_new_leader(bdb_state);
 
     /* master cannot be incoherent, that makes no sense. */
     if (bdb_state->not_coherent) {
@@ -5342,13 +5339,11 @@ static int bdb_upgrade_downgrade_reopen_wrap(bdb_state_type *bdb_state, int op,
             rc = bdb_downgrade_int(bdb_state, 1, done);
             if (op == DOWNGRADE_NOELECT) {
                 assert(bdb_state->parent == NULL);
-                if (bdb_state->repinfo->master_host ==
-                    bdb_state->repinfo->myhost) {
-                    /* we need the watcher thread to kick periodical elections
-                       to get us a new master
-                       this handles the cluster split case */
-                    set_repinfo_master_host(bdb_state, db_eid_invalid, __func__,
-                                            __LINE__);
+                if (bdb_state->repinfo->master_host == bdb_state->repinfo->myhost) {
+                    /* we need the watcher thread to kick periodical elections to
+                     * get us a new master this handles the cluster split case */
+                    //thedb_set_master(db_eid_invalid);
+                    set_invalid_leader(bdb_state);
                 }
             }
         }
@@ -5807,7 +5802,7 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
         bdb_state->repinfo->myhost = bdb_state->repinfo->myhost_interned->str;
 
         /* we dont know who the master is yet */
-        set_repinfo_master_host(bdb_state, db_eid_invalid, __func__, __LINE__);
+        //set_invalid_leader(bdb_state); /* TODO - Delete this; bdb_state is not ready yet */
 
         /* save our netinfo pointer */
         bdb_state->repinfo->netinfo = netinfo;
@@ -5932,8 +5927,7 @@ static bdb_state_type *bdb_open_int(int envonly, const char name[], const char d
         bdb_state->read_write = iammaster ? 1 : 0;
         bdb_state->envonly = 1;
         bdb_state->repinfo->upgrade_allowed = 1;
-
-        whoismaster_rtn(bdb_state, 1);
+        set_new_leader(bdb_state /*, 1*/);
 
         struct hostinfo *h = retrieve_hostinfo(gbl_myhostname_interned);
         logmsg(LOGMSG_INFO, "@LSN %u:%u\n", h->seqnum.lsn.file, h->seqnum.lsn.offset);

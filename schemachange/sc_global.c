@@ -88,7 +88,7 @@ inline int is_dta_being_rebuilt(struct scplan *plan)
     return 0;
 }
 
-int gbl_verbose_set_sc_in_progress = 0;
+int gbl_verbose_set_sc_in_progress = 1;
 static pthread_mutex_t gbl_sc_progress_lk = PTHREAD_MUTEX_INITIALIZER;
 
 int get_stopsc(const char *func, int line)
@@ -346,17 +346,6 @@ done:
 
     Pthread_mutex_unlock(&schema_change_in_progress_mutex);
     return rc;
-}
-
-void sc_assert_clear(const char *func, int line)
-{
-    Pthread_mutex_lock(&schema_change_in_progress_mutex);
-    if (gbl_schema_change_in_progress != 0) {
-        logmsg(LOGMSG_FATAL, "%s:%d downgrading with outstanding sc\n", func,
-               line);
-        abort();
-    }
-    Pthread_mutex_unlock(&schema_change_in_progress_mutex);
 }
 
 void sc_status(struct dbenv *dbenv)
