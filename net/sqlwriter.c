@@ -14,6 +14,7 @@
    limitations under the License.
 */
 
+#include <poll.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -50,48 +51,97 @@ struct sqlwriter {
     sql_pack_fn *pack_hb;
     unsigned bad : 1;
     unsigned done : 1;
-    unsigned do_timeout : 1;
     unsigned timed_out : 1;
-    unsigned flushing : 1;
-    unsigned packing : 1;
+    unsigned writing : 1;
     SSL *ssl;
     int (*wr_evbuffer_fn)(struct sqlwriter *, int);
 };
 
 static int sql_writer_busy(struct sqlwriter *writer)
 {
-    return writer->flushing || writer->packing;
+    return writer->writing || writer->writing;
 }
 
-static void sql_enable_flush(struct sqlwriter *writer)
+#define xxxtrylock                                                                                 \
+    ({                                                                                             \
+        struct timeval a, b, c;                                                                    \
+        gettimeofday(&a, NULL);                                                                    \
+        int rc = pthread_mutex_trylock(&writer->wr_lock);                                          \
+        gettimeofday(&b, NULL);                                                                    \
+        timersub(&b, &a, &c);                                                                      \
+        if (rc)                                                                                    \
+            printf("%s:%d lock busy took:%lds.%ldus\n", __func__, __LINE__, c.tv_sec, c.tv_usec);  \
+        else                                                                                       \
+            printf("%s:%d trylocked took:%lds.%ldus\n", __func__, __LINE__, c.tv_sec, c.tv_usec);  \
+        rc;                                                                                        \
+    })
+
+#define xxxlock                                                                                    \
+    ({                                                                                             \
+        struct timeval a, b, c;                                                                    \
+        gettimeofday(&a, NULL);                                                                    \
+        Pthread_mutex_lock(&writer->wr_lock);                                                      \
+        gettimeofday(&b, NULL);                                                                    \
+        timersub(&b, &a, &c);                                                                      \
+        printf("%s:%d locked took:%lds.%ldus\n", __func__, __LINE__, c.tv_sec, c.tv_usec);         \
+    })
+
+#define xxxunlock                                                                                  \
+    ({                                                                                             \
+        Pthread_mutex_unlock(&writer->wr_lock);                                                    \
+    })
+
+static int sql_enable_flush(struct sqlwriter *writer)
 {
-    writer->flushing = 1;
+    xxxlock;
+    if (writer->bad) {
+        xxxunlock;
+        return -1;
+    }
+    writer->writing = 1;
     struct timeval recover_ddlk_timeout = {.tv_sec = 1};
     event_add(writer->flush_ev, &recover_ddlk_timeout);
+    xxxunlock;
+    return 0;
 }
 
 static void sql_disable_flush(struct sqlwriter *writer)
 {
-    writer->flushing = 0;
+    xxxlock;
+    writer->writing = 0;
     event_del(writer->flush_ev);
+    xxxunlock;
+}
+
+static void rerun_timeout_cb(struct sqlwriter *writer)
+{
+    puts(__func__);
+    struct timeval retry = {.tv_usec = 10 * 1000};
+    event_add(writer->timeout_ev, &retry);
 }
 
 static void sql_timeout_cb(int fd, short what, void *arg)
 {
     struct sqlwriter *writer = arg;
     check_thd(writer->timer_thd);
-    if (pthread_mutex_trylock(&writer->wr_lock) != 0) {
-        struct timeval retry = {.tv_usec = 100 * 1000};
-        event_add(writer->timeout_ev, &retry);
+    if (xxxtrylock) {//pthread_mutex_trylock(&writer->wr_lock) != 0) {
+        rerun_timeout_cb(writer);
         return;
     }
-    if (!writer->bad && !writer->done) {
-        writer->do_timeout = 1;
-        maxquerytime_cb(writer->clnt);
-        writer->do_timeout = 0;
-        writer->timed_out = 1;
+    if (writer->bad || writer->done) {
+        printf("%s bad:%d done:%d\n", __func__, writer->bad, writer->done);
+        xxxunlock;
+        return;
     }
-    Pthread_mutex_unlock(&writer->wr_lock);
+    if (writer->writing) {
+        xxxunlock;
+        rerun_timeout_cb(writer);
+        return;
+    }
+    printf("%s\n", __func__);
+    writer->timed_out = 1;
+    xxxunlock;
+    maxquerytime_cb(writer->clnt); /* error response sets `done` flag */
 }
 
 void sql_enable_heartbeat(struct sqlwriter *writer)
@@ -146,7 +196,7 @@ static int wr_evbuffer(struct sqlwriter *writer, int fd)
     int rc = writer->wr_evbuffer_fn(writer, fd);
     if (writer->timed_out && writer->dispatch_timeout) {
         /* Exceeded MAXQUERYTIME waiting for leader-election */
-        writer->dispatch_timeout(writer->clnt); /* -> timed_out_waiting_for_leader */
+        writer->dispatch_timeout(writer->clnt); /* -> timed_out_waiting_for_leader() */
         writer->dispatch_timeout = NULL;
     }
     return rc;
@@ -162,7 +212,6 @@ static void sql_flush_cb(int fd, short what, void *arg)
         return;
     }
     int n;
-    Pthread_mutex_lock(&writer->wr_lock);
     while (evbuffer_get_length(writer->wr_buf)) {
         if ((n = wr_evbuffer(writer, fd)) <= 0) break;
         writer->sent_at = time(NULL);
@@ -170,28 +219,18 @@ static void sql_flush_cb(int fd, short what, void *arg)
     if (evbuffer_get_length(writer->wr_buf) == 0) {
         sql_disable_flush(writer);
     } else if (n <= 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        xxxlock;
         writer->bad = 1;
         event_del(writer->flush_ev);
+        xxxunlock;
     }
-    Pthread_mutex_unlock(&writer->wr_lock);
 }
 
 int sql_flush(struct sqlwriter *writer)
 {
-    Pthread_mutex_lock(&writer->wr_lock);
-    if (writer->bad) {
-        Pthread_mutex_unlock(&writer->wr_lock);
-        return -1;
-    }
-    sql_enable_flush(writer);
-    Pthread_mutex_unlock(&writer->wr_lock);
-    event_base_dispatch(writer->wr_base);
+    if (sql_enable_flush(writer) != 0) return -1;
+    event_base_dispatch(writer->wr_base); /* -> sql_flush_cb() */
     return writer->bad ? -1 : 0;
-}
-
-static int from_timeout_cb(struct sqlwriter *writer)
-{
-    return writer->do_timeout && pthread_equal(pthread_self(), writer->timer_thd);
 }
 
 static int sql_pack_response(struct sqlwriter *writer, void *arg)
@@ -204,6 +243,9 @@ static int sql_pack_response(struct sqlwriter *writer, void *arg)
      */
     if (rc >= 0) {
         writer->done = (rc > 0);
+        if (writer->done) {
+            printf("%s done!\n", __func__);
+        }
         rc = 0;
     }
     return rc;
@@ -222,94 +264,74 @@ int sql_append_packed(struct sqlwriter *writer, const void *data, size_t len)
     size_t nleft = len;
     struct evbuffer *wr_buf = writer->wr_buf;
     const uint8_t *ptr = data;
-    int rc;
-
     while (nleft > 0) {
         if (evbuffer_get_length(wr_buf) >= SQLWRITER_MAX_BUF) {
-            /* We've accumulated enough bytes, flush now. */
-            rc = sql_flush(writer);
-
-            /*
-             * After reacquiring `wr_lock', check again whether we should proceed,
-             * as the writer might have been marked bad by other callbacks
-             * (heartbeat, trickle, etc.).
-             */
-            if (rc != 0 || writer->bad || writer->timed_out)
-                return -1;
+            printf("%s calling flush len:%zu\n", __func__, evbuffer_get_length(wr_buf));
+            if (sql_flush(writer)) return -1;
+            poll(0, 0, 100);
         }
-
         int cap = SQLWRITER_MAX_BUF - evbuffer_get_length(wr_buf);
         if (cap >= nleft) {
             /* We're about to exit the loop. Do a copy here. */
-            rc = evbuffer_add(wr_buf, ptr + (len - nleft), nleft);
-            if (rc != 0)
-                return -1;
+            if (evbuffer_add(wr_buf, ptr + (len - nleft), nleft)) return -1;
             nleft = 0;
         } else {
             /*
              * We know we'll continue the loop and do a flush, so we add
              * a reference here to avoid copying the data.
              */
-            rc = evbuffer_add_reference(wr_buf, ptr + (len - nleft), cap, NULL, NULL);
-            if (rc != 0)
-                return -1;
+            if (evbuffer_add_reference(wr_buf, ptr + (len - nleft), cap, NULL, NULL)) return -1;
             nleft -= cap;
         }
     }
-
     return 0;
 }
 
 int sql_write(struct sqlwriter *writer, void *arg, int flush)
 {
-    if (from_timeout_cb(writer)) { /* TODO FIXME : I don't like this special case */
-        /* We're holding wr_lock from sql_timeout_cb() */
-        return sql_pack_response(writer, arg);
-    }
-    Pthread_mutex_lock(&writer->wr_lock);
-    if (writer->bad || writer->timed_out) {
-        Pthread_mutex_unlock(&writer->wr_lock);
+    xxxlock;
+    if (writer->bad || writer->done) {
+        xxxunlock;
         return -1;
     }
-    writer->packing = 1;
-    Pthread_mutex_unlock(&writer->wr_lock);
-    if (sql_pack_response(writer, arg) != 0) {
-        return -1;
-    }
-    Pthread_mutex_lock(&writer->wr_lock);
-    writer->packing = 0;
+    writer->writing = 1;
+    xxxunlock;
+    if (sql_pack_response(writer, arg) != 0) return -1;
+    xxxlock;
+    writer->writing = 0;
     int outstanding = evbuffer_get_length(writer->wr_buf);
-    Pthread_mutex_unlock(&writer->wr_lock);
+    xxxunlock;
     if ((outstanding < SQLWRITER_MAX_BUF) && !flush) {
         return 0;
     }
+    printf("%s outstanding:%d flush:%d\n", __func__, outstanding, flush);
     return sql_flush(writer);
 }
 
 int sql_writev(struct sqlwriter *writer, struct iovec *v, int n)
 {
     int rc = 0;
-    Pthread_mutex_lock(&writer->wr_lock);
+    xxxlock;
     for (int i = 0; i < n; ++i) {
         rc = evbuffer_add(writer->wr_buf, v[i].iov_base, v[i].iov_len);
         if (rc) break;
     }
-    Pthread_mutex_unlock(&writer->wr_lock);
+    xxxunlock;
     return rc;
 }
 
 int sql_write_buffer(struct sqlwriter *writer, struct evbuffer *buf)
 {
-    Pthread_mutex_lock(&writer->wr_lock);
+    xxxlock;
     int rc = evbuffer_add_buffer(writer->wr_buf, buf);
-    Pthread_mutex_unlock(&writer->wr_lock);
+    xxxunlock;
     return rc;
 }
 
 static void sql_trickle_int(struct sqlwriter *writer, int fd)
 {
-    if (sql_writer_busy(writer)) return;
-    if (writer->bad || writer->done || writer->timed_out) {
+    if (writer->writing) return;
+    if (writer->bad || writer->timed_out) {
         sql_disable_heartbeat(writer);
         return;
     }
@@ -334,23 +356,23 @@ static void sql_trickle_cb(int fd, short what, void *arg)
         abort();
     }
     struct sqlwriter *writer = arg;
-    if (pthread_mutex_trylock(&writer->wr_lock) != 0) return;
+    if (xxxtrylock) return; //pthread_mutex_trylock(&writer->wr_lock) != 0) return;
     sql_trickle_int(writer, fd);
-    Pthread_mutex_unlock(&writer->wr_lock);
+    xxxunlock;
 }
 
 static void sql_heartbeat_cb(int fd, short what, void *arg)
 {
     struct sqlwriter *writer = arg;
-    if (pthread_mutex_trylock(&writer->wr_lock) != 0) return;
-    if (!sql_writer_busy(writer)) {
+    if (xxxtrylock) return; //pthread_mutex_trylock(&writer->wr_lock) != 0) return;
+    if (!writer->writing) {
         int len = evbuffer_get_length(writer->wr_buf);
         time_t now = time(NULL);
         if (len || difftime(now, writer->sent_at) >= min_hb_time) {
             event_add(writer->heartbeat_trickle_ev, NULL);
         }
     }
-    Pthread_mutex_unlock(&writer->wr_lock);
+    xxxunlock;
 }
 
 void sql_reset(struct sqlwriter *writer)
@@ -360,7 +382,7 @@ void sql_reset(struct sqlwriter *writer)
     writer->done = 0;
     writer->sent_at = time(NULL);
     writer->timed_out = 0;
-    writer->flushing = 0;
+    writer->writing = 0;
 }
 
 int sql_peer_check(struct sqlwriter *writer)
@@ -374,20 +396,11 @@ int sql_done(struct sqlwriter *writer)
     if (done_cb_evbuffer(clnt) != 0) {
         return -1;
     }
-    Pthread_mutex_lock(&writer->wr_lock);
-    writer->done = 1;
-    if (writer->bad) {
-        Pthread_mutex_unlock(&writer->wr_lock);
-        return -1;
-    }
+    if (!writer->bad && !writer->done) abort();
+    if (writer->bad) return -1;
     sql_disable_heartbeat(writer);
     sql_disable_timeout(writer);
-    if (evbuffer_get_length(writer->wr_buf)) {
-        Pthread_mutex_unlock(&writer->wr_lock);
-        return sql_flush(writer);
-    }
-    Pthread_mutex_unlock(&writer->wr_lock);
-    return 0;
+    return sql_flush(writer);
 }
 
 struct event_base *sql_wrbase(struct sqlwriter *writer)

@@ -7218,7 +7218,7 @@ void exhausted_appsock_connections(struct sqlclntstate *clnt)
 int maxquerytime_cb(struct sqlclntstate *clnt)
 {
     clnt->statement_timedout = 1;
-    return write_response(clnt, RESPONSE_ERROR, (char *)sqlite3ErrStr(SQLITE_TIMEDOUT), CDB2ERR_QUERYLIMIT);
+    return write_response(clnt, RESPONSE_ERROR, (char *)sqlite3ErrStr(SQLITE_TIMEDOUT), CDB2ERR_QUERYLIMIT); /* sql_write */
 }
 
 /* Sqlite prototypes this as i64, since it insists on C89 compatibility, which precludes

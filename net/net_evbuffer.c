@@ -528,6 +528,7 @@ static void *net_dispatch(void *arg)
     if (start_callback) {
         start_callback(start_stop_callback_data);
     }
+    printf("thd:%p base:%p\n", (void*)pthread_self(), n->base);
     event_base_dispatch(n->base);
     if (stop_callback) {
         stop_callback(start_stop_callback_data);

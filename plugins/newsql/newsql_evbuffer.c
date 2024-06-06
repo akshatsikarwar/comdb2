@@ -970,9 +970,16 @@ static int newsql_pack_small(struct sqlwriter *writer, struct newsql_pack_arg *a
         memcpy(out, hdr, sizeof(*hdr));
         out += sizeof(*hdr);
     }
-    if (resp) cdb2__sqlresponse__pack(resp, out);
+    if (resp) {
+        cdb2__sqlresponse__pack(resp, out);
+    }
     evbuffer_commit_space(wrbuf, v, 1);
-    return resp ? resp->response_type == RESPONSE_TYPE__LAST_ROW : 0;
+    if (!resp) return 0;
+    if(resp->error_code || resp->response_type == RESPONSE_TYPE__LAST_ROW) {
+        printf("%s err:%d last:%d\n", __func__, resp->error_code, resp->response_type == RESPONSE_TYPE__LAST_ROW);
+    }
+    if(resp->error_code || resp->response_type == RESPONSE_TYPE__LAST_ROW) return 1; /* done */
+    return 0;
 }
 
 struct pb_evbuffer_appender {
@@ -995,7 +1002,7 @@ static void pb_evbuffer_append(ProtobufCBuffer *vbuf, size_t len, const uint8_t 
 static int newsql_pack(struct sqlwriter *sqlwriter, void *data)
 {
     struct newsql_pack_arg *arg = data;
-    if (arg->resp_len <= SQLWRITER_MAX_BUF || arg->appdata->clnt.query_timeout) {
+    if (arg->resp_len <= SQLWRITER_MAX_BUF) {
         return newsql_pack_small(sqlwriter, arg);
     }
     struct pb_evbuffer_appender appender = PB_EVBUFFER_APPENDER_INIT(sqlwriter);
@@ -1004,14 +1011,11 @@ static int newsql_pack(struct sqlwriter *sqlwriter, void *data)
         if (appender.rc != 0)
             return -1;
     }
-    if (arg->resp) {
-        cdb2__sqlresponse__pack_to_buffer(arg->resp, &appender.vbuf);
-        if (appender.rc != 0)
-            return -1;
-        if (arg->resp->response_type == RESPONSE_TYPE__LAST_ROW) {
-            return 1;
-        }
-    }
+    const CDB2SQLRESPONSE *resp = arg->resp;
+    if (!resp) return 0;
+    cdb2__sqlresponse__pack_to_buffer(resp, &appender.vbuf);
+    if (appender.rc != 0) return -1;
+    if (resp->error_code || resp->response_type == RESPONSE_TYPE__LAST_ROW) return 1;
     return 0;
 }
 
