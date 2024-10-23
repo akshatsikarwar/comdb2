@@ -456,7 +456,7 @@ static void *do_pstack(void *arg)
 }
 
 #define timeval_to_ms(x) x.tv_sec * 1000 + x.tv_usec / 1000
-int gbl_timer_warn_interval = 1500; //msec
+int gbl_timer_warn_interval = 300; //msec
 int gbl_timer_pstack_interval =  5 * 60; //sec
 extern struct timeval last_timer_pstack;
 static struct timeval last_timer_check;
@@ -516,7 +516,7 @@ static void *net_dispatch(void *arg)
 
     current_base = n->base;
     struct event *ev = event_new(n->base, -1, EV_PERSIST, event_tick, n);
-    struct timeval one = {1, 0};
+    struct timeval one = {0, 100 * 1000}; // 100ms
 
     ENABLE_PER_THREAD_MALLOC(n->who);
 

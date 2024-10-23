@@ -14,6 +14,7 @@
    limitations under the License.
  */
 
+#include <poll.h>
 #include <pthread.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -418,9 +419,11 @@ static void *watchdog_watcher_thread(void *arg)
     while (!db_is_exiting()) {
         int ss = 10; /* sleep for these many seconds */
         for (int i = 0; i < ss && !db_is_exiting(); i++) {
-            sleep(1);
-            void check_timers(void);
-            check_timers();
+            for (int j = 0; j < 10; ++j) {
+                poll(NULL, 0, 100);
+                void check_timers(void);
+                check_timers();
+            }
         }
 
         if (gbl_nowatch || db_is_exiting())
