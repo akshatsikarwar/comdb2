@@ -140,8 +140,7 @@ typedef struct osqlstate {
 
     /* == sql_thread == */
     osql_target_t target;    /* where to send the bplog */
-    unsigned long long rqid; /* per node offload request session */
-    uuid_t uuid;             /* session id, take 2 */
+    uuid_t uuid;             /* session id */
     char *tablename;         /* malloc-ed cache of send tablename for usedb */
     int tablenamelen;        /* tablename length */
     int sentops;             /* number of operations per statement */

@@ -1012,9 +1012,9 @@ static int init_ireq_legacy(struct dbenv *dbenv, struct ireq *iq, SBUF2 *sb,
                      iq->frommach ? iq->frommach : "null", frompid);
     } else if (sorese) {
         iq->sorese = sorese;
-        snprintf(iq->corigin, sizeof(iq->corigin), "SORESE# %15s %s RQST %llx",
+        snprintf(iq->corigin, sizeof(iq->corigin), "SORESE# %15s %s",
                  iq->sorese->target.host,
-                 osql_sorese_type_to_str(iq->sorese->type), iq->sorese->rqid);
+                 osql_sorese_type_to_str(iq->sorese->type));
         iq->timings.req_received = osql_log_time();
         /* cache these things so we don't change too much code */
         iq->tranddl = iq->sorese->scs.count;

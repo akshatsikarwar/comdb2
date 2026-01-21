@@ -563,7 +563,7 @@ static void osqlpfault_do_work_pp(struct thdpool *pool, void *work,
 }
 
 int osql_page_prefault(char *rpl, int rplen, struct dbtable **last_db,
-                       int **iq_step_ix, unsigned long long rqid, uuid_t uuid,
+                       int **iq_step_ix, uuid_t uuid,
                        unsigned long long seq)
 {
     static int last_step_idex = 0;

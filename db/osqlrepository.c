@@ -33,8 +33,7 @@
 #include "comdb2_atomic.h"
 
 typedef struct osql_repository {
-    hash_t *rqs; /* hash of outstanding requests */
-    hash_t *rqsuuid;
+    hash_t *rqsuuid; /* hash of outstanding requests */
     pthread_mutex_t hshlck; /* protect the hash */
     struct dbenv *dbenv;    /* dbenv */
 
@@ -57,10 +56,9 @@ int osql_repository_init(void)
         goto error;
 
     Pthread_mutex_init(&tmp->hshlck, NULL);
-    tmp->rqs = hash_init(sizeof(unsigned long long)); /* indexed after rqid */
     tmp->rqsuuid = hash_init_o(offsetof(osql_sess_t, uuid), sizeof(uuid_t));
 
-    if (!tmp->rqs || !tmp->rqsuuid)
+    if (!tmp->rqsuuid)
         goto error;
 
     theosql = tmp;
@@ -119,8 +117,8 @@ int osql_repository_add(osql_sess_t *sess)
         uuidstr_t us;
 
         logmsg(LOGMSG_ERROR,
-               "%s: trying to add another session with the same rqid, rqid=%llx uuid=%s\n",
-               __func__, sess->rqid, comdb2uuidstr(sess->uuid, us));
+               "%s: trying to add another session with the same uuid=%s\n",
+               __func__, comdb2uuidstr(sess->uuid, us));
 
         int keep = osql_sess_try_terminate(sess_chk, NULL);
         if (!keep) {
@@ -132,10 +130,7 @@ int osql_repository_add(osql_sess_t *sess)
         }
     }
 
-    if (sess->rqid == OSQL_RQID_USE_UUID)
-        rc = hash_add(theosql->rqsuuid, sess);
-    else
-        rc = hash_add(theosql->rqs, sess);
+    rc = hash_add(theosql->rqsuuid, sess);
 
     if (rc) {
         logmsg(LOGMSG_ERROR, "%s: Unable to hash_add the new request\n",
@@ -150,12 +145,7 @@ int osql_repository_add(osql_sess_t *sess)
 
 static int osql_repository_rem_unlocked(osql_sess_t *sess)
 {
-    int rc = 0;
-    if (sess->rqid == OSQL_RQID_USE_UUID) {
-        rc = hash_del(theosql->rqsuuid, sess);
-    } else {
-        rc = hash_del(theosql->rqs, sess);
-    }
+    int rc = hash_del(theosql->rqsuuid, sess);
     if (rc) {
         logmsg(LOGMSG_DEBUG, "%s: Unable to hash_del, session %p (not found)\n",
                __func__, sess);
@@ -249,19 +239,13 @@ int osql_repository_printcrtsessions(void)
 
     Pthread_mutex_lock(&theosql->hshlck);
 
-    logmsg(LOGMSG_USER, "Begin osql session info (rqs):\n");
-    if ((rc = hash_for(theosql->rqs, _getcrtinfo, NULL))) {
-        logmsg(LOGMSG_USER, "hash_for failed with rc = %d\n", rc);
-        rc = -1;
-    } else
-        logmsg(LOGMSG_USER, "Done osql info (rqs).\n");
-    logmsg(LOGMSG_USER, "Begin osql session info (uuids):\n");
+    logmsg(LOGMSG_USER, "Begin osql session info:\n");
 
     if ((rc = hash_for(theosql->rqsuuid, _getcrtinfo, NULL))) {
         logmsg(LOGMSG_USER, "hash_for failed with rc = %d\n", rc);
         rc = -1;
     } else
-        logmsg(LOGMSG_USER, "Done osql info(uuids).\n");
+        logmsg(LOGMSG_USER, "Done osql info.\n");
 
     Pthread_mutex_unlock(&theosql->hshlck);
 
@@ -303,11 +287,6 @@ int osql_repository_terminatenode(char *host)
 
     /* insert it into the hash table */
     Pthread_mutex_lock(&theosql->hshlck);
-    if ((rc = hash_for(theosql->rqs, osql_session_testterminate, host))) {
-        logmsg(LOGMSG_ERROR, "hash_for failed with rc = %d\n", rc);
-        Pthread_mutex_unlock(&theosql->hshlck);
-        return -1;
-    }
     if ((rc = hash_for(theosql->rqsuuid, osql_session_testterminate, host))) {
         logmsg(LOGMSG_ERROR, "hash_for failed with rc = %d\n", rc);
         Pthread_mutex_unlock(&theosql->hshlck);
@@ -333,7 +312,7 @@ int osql_repository_cancelall(void)
  * used by socksql poking
  *
  */
-int osql_repository_session_exists(unsigned long long rqid, uuid_t uuid,
+int osql_repository_session_exists(uuid_t uuid,
                                    int *rows_affected)
 {
     if (!theosql)
@@ -374,7 +353,6 @@ void osql_repository_for_each(void *arg, int (*func)(void *, void *))
 
     Pthread_mutex_lock(&theosql->hshlck);
 
-    hash_for(theosql->rqs, func, arg);
     hash_for(theosql->rqsuuid, func, arg);
 
     Pthread_mutex_unlock(&theosql->hshlck);

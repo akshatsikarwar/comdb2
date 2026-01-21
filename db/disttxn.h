@@ -54,15 +54,15 @@ void coordinator_resolve(const char *dist_txnid);
 void coordinator_failed(const char *dist_txnid);
 
 /* This participant registers a dist-txn from osql stream */
-int osql_register_disttxn(const char *dist_txnid, unsigned long long rqid, uuid_t uuid, char **coordinator_dbname,
+int osql_register_disttxn(const char *dist_txnid, uuid_t uuid, char **coordinator_dbname,
                           char **coordinator_tier, char **coordinator_master);
 
 /* This participant has received the coordinator's sanction for this osql transaction */
-int osql_sanction_disttxn(const char *dist_txnid, unsigned long long *rqid, uuid_t *uuid,
+int osql_sanction_disttxn(const char *dist_txnid, uuid_t *uuid,
                           const char *coordinator_dbname, const char *coordinator_tier, const char *coordinator_master);
 
 /* This participant has been asked to cancel this osql transaction */
-int osql_cancel_disttxn(const char *dist_txnid, unsigned long long *rqid, uuid_t *uuid);
+int osql_cancel_disttxn(const char *dist_txnid, uuid_t *uuid);
 
 /* This participant sends the coordinator a 'failed-prepare' message */
 int participant_has_failed(const char *dist_txnid, const char *dbname, const char *master, int rcode, int outrc,

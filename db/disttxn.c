@@ -108,10 +108,9 @@ typedef struct block_participant {
     pthread_cond_t cd;
 } participant_t;
 
-/* Simple structure which maps dist-txnid to local rqid+uuid */
+/* Simple structure which maps dist-txnid to local uuid */
 typedef struct sanctioned {
     char *dist_txnid;
-    unsigned long long rqid;
     uuid_t uuid;
     char *coordinator_dbname;
     char *coordinator_tier;
@@ -2126,7 +2125,7 @@ int coordinator_committed(const char *dist_txnid)
 }
 
 /* osql session registers this disttxn- it may have already been sanctioned by coordinator */
-int osql_register_disttxn(const char *dist_txnid, unsigned long long rqid, uuid_t uuid, char **coordinator_dbname,
+int osql_register_disttxn(const char *dist_txnid, uuid_t uuid, char **coordinator_dbname,
                           char **coordinator_tier, char **coordinator_master)
 {
     if (gbl_debug_disttxn_trace) {
@@ -2139,13 +2138,11 @@ int osql_register_disttxn(const char *dist_txnid, unsigned long long rqid, uuid_
     if (sanc == NULL) {
         sanc = (sanctioned_t *)calloc(sizeof(*sanc), 1);
         sanc->dist_txnid = strdup(dist_txnid);
-        sanc->rqid = rqid;
         comdb2uuidcpy(sanc->uuid, uuid);
         sanc->hbeats.sanc = sanc;
         hash_add(sanctioned_hash, sanc);
     } else {
         rtn = sanc->sanctioned;
-        sanc->rqid = rqid;
         comdb2uuidcpy(sanc->uuid, uuid);
         if (sanc->sanctioned == 1) {
             (*coordinator_dbname) = strdup(sanc->coordinator_dbname);
@@ -2159,7 +2156,7 @@ int osql_register_disttxn(const char *dist_txnid, unsigned long long rqid, uuid_
 }
 
 /* Called from osql_discard- coordinator master tells me (participant master) to discard */
-int osql_cancel_disttxn(const char *dist_txnid, unsigned long long *rqid, uuid_t *uuid)
+int osql_cancel_disttxn(const char *dist_txnid, uuid_t *uuid)
 {
     if (gbl_debug_disttxn_trace) {
         logmsg(LOGMSG_USER, "DISTTXN %s dist_txnid %s\n", __func__, dist_txnid);
@@ -2169,7 +2166,6 @@ int osql_cancel_disttxn(const char *dist_txnid, unsigned long long *rqid, uuid_t
     Pthread_mutex_lock(&sanc_lk);
     sanc = hash_find(sanctioned_hash, &dist_txnid);
     if (sanc != NULL) {
-        (*rqid) = sanc->rqid;
         comdb2uuidcpy((*uuid), sanc->uuid);
         sanc->sanctioned = -1;
         rtn = 1;
@@ -2192,7 +2188,7 @@ int dist_heartbeats(dist_hbeats_type *dt)
 extern int enable_dist_heartbeats(dist_hbeats_type *dt);
 
 /* Called from osql_prepare- coordinator master tells me (participant master) to prepare */
-int osql_sanction_disttxn(const char *dist_txnid, unsigned long long *rqid, uuid_t *uuid,
+int osql_sanction_disttxn(const char *dist_txnid, uuid_t *uuid,
                           const char *coordinator_dbname, const char *coordinator_tier, const char *coordinator_master)
 {
     if (gbl_debug_disttxn_trace) {
@@ -2203,7 +2199,6 @@ int osql_sanction_disttxn(const char *dist_txnid, unsigned long long *rqid, uuid
     Pthread_mutex_lock(&sanc_lk);
     sanc = hash_find(sanctioned_hash, &dist_txnid);
     if (sanc != NULL) {
-        (*rqid) = sanc->rqid;
         comdb2uuidcpy((*uuid), sanc->uuid);
         sanc->sanctioned = 1;
         if (sanc->coordinator_master) {

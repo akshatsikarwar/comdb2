@@ -2717,10 +2717,9 @@ static int cursor_move_table(BtCursor *pCur, int *pRes, int how)
     case BDBERR_TRAN_CANCELLED: return SQLITE_TRAN_CANCELLED;
     case BDBERR_NO_LOG: return SQLITE_TRAN_NOLOG;
     case BDBERR_DEADLOCK:
-        logmsg(LOGMSG_ERROR, "%s: too much contention, retried %d times [%llx]\n", __func__,
-               gbl_move_deadlk_max_attempt, clnt->osql.rqid);
-        ctrace("%s: too much contention, retried %d times [%llx]\n", __func__, gbl_move_deadlk_max_attempt,
-               clnt->osql.rqid);
+        logmsg(LOGMSG_ERROR, "%s: too much contention, retried %d times\n", __func__,
+               gbl_move_deadlk_max_attempt);
+        ctrace("%s: too much contention, retried %d times\n", __func__, gbl_move_deadlk_max_attempt);
         return SQLITE_DEADLOCK;
     }
 
@@ -2853,11 +2852,8 @@ static int cursor_move_index(BtCursor *pCur, int *pRes, int how)
     case BDBERR_DEADLOCK:
         logmsg(LOGMSG_ERROR, "%s too much contention, retried %d times.\n", __func__,
                 gbl_move_deadlk_max_attempt);
-        ctrace("%s: too much contention, retried %d times [%llx]\n", __func__,
-               gbl_move_deadlk_max_attempt,
-               (thd->clnt && thd->clnt->osql.rqid)
-                   ? thd->clnt->osql.rqid
-                   : 0);
+        ctrace("%s: too much contention, retried %d times\n", __func__,
+               gbl_move_deadlk_max_attempt);
         return SQLITE_DEADLOCK;
     }
 
@@ -4913,8 +4909,8 @@ int start_new_transaction(struct sqlclntstate *clnt)
 
     uuidstr_t us;
     char rqidinfo[40];
-    snprintf(rqidinfo, sizeof(rqidinfo), "rqid=%016llx %s appsock %" PRIxPTR,
-             clnt->osql.rqid, comdb2uuidstr(clnt->osql.uuid, us),
+    snprintf(rqidinfo, sizeof(rqidinfo), "uuid=%s appsock %" PRIxPTR,
+             comdb2uuidstr(clnt->osql.uuid, us),
              (intptr_t)clnt->appsock_id);
     thrman_setid(thrman_self(), rqidinfo);
 
@@ -6347,14 +6343,11 @@ int sqlite3BtreeMovetoUnpacked(BtCursor *pCur, /* The cursor to be moved */
                 if (bdberr == BDBERR_DEADLOCK) {
                     uuidstr_t us;
                     ctrace(
-                        "%s: too much contention, retried %d times [%llx %s]\n",
+                        "%s: too much contention, retried %d times [%s]\n",
                         __func__, gbl_move_deadlk_max_attempt,
-                        (thd->clnt && thd->clnt->osql.rqid)
-                            ? thd->clnt->osql.rqid
-                            : 0,
-                        (thd->clnt && thd->clnt->osql.rqid)
+                        (thd->clnt && thd->clnt->sql)
                             ? comdb2uuidstr(thd->clnt->osql.uuid, us)
-                            : "invalid-uuid");
+                            : "no-uuid");
                 }
                 /*
                  * printf("sqlite3BtreeMoveto: deadlock bdberr = %d\n", bdberr);
@@ -9722,11 +9715,8 @@ void sql_dump_running_statements(void)
         Pthread_mutex_lock(&thd->lk);
 
         if ((clnt = thd->clnt) != NULL && clnt->sql) {
-            if (clnt->osql.rqid) {
-                uuidstr_t us;
-                snprintf(rqid, sizeof(rqid), "txn %016llx %s", clnt->osql.rqid, comdb2uuidstr(clnt->osql.uuid, us));
-            } else
-                rqid[0] = 0;
+            uuidstr_t us;
+            snprintf(rqid, sizeof(rqid), "txn %s", comdb2uuidstr(clnt->osql.uuid, us));
 
             logmsg(LOGMSG_USER, "id %d %02d/%02d/%02d %02d:%02d:%02d %s%s pid %d task %s ", thd->id, tm.tm_mon + 1,
                    tm.tm_mday, 1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec, rqid, clnt->origin,

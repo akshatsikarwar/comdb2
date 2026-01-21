@@ -36,8 +36,7 @@ struct sqlclntstate;
 struct osql_sqlthr {
     struct errstat err;  /* valid if done = 1 */
     pthread_cond_t cond;
-    unsigned long long rqid; /* osql rq id */
-    uuid_t uuid;             /* request id, take 2 */
+    uuid_t uuid;             /* request id */
     const char *master;      /* who was the master I was talking to */
     struct sqlclntstate *clnt; /* cache clnt */
     pthread_mutex_t mtx; /* mutex and cond for commitrc sync */
@@ -82,7 +81,7 @@ void osql_checkboard_destroy(void);
  * - <0 if error
  *
  */
-int osql_chkboard_sqlsession_exists(unsigned long long rqid, uuid_t uuid);
+int osql_chkboard_sqlsession_exists(uuid_t uuid);
 
 /**
  * Register an osql thread with the checkboard
@@ -105,7 +104,7 @@ int osql_unregister_sqlthr(struct sqlclntstate *clnt);
  * A null errstat means no error.
  *
  */
-int osql_chkboard_sqlsession_rc(unsigned long long rqid, uuid_t uuid, int nops, void *data, struct errstat *errstat,
+int osql_chkboard_sqlsession_rc(uuid_t uuid, int nops, void *data, struct errstat *errstat,
                                 struct query_effects *effects, const char *from);
 
 /**
@@ -113,14 +112,14 @@ int osql_chkboard_sqlsession_rc(unsigned long long rqid, uuid_t uuid, int nops, 
  * Upon return, sqlclntstate's errstat is set
  *
  */
-int osql_chkboard_wait_commitrc(unsigned long long rqid, uuid_t uuid,
+int osql_chkboard_wait_commitrc(uuid_t uuid,
                                 int max_wait, struct errstat *xerr);
 
 /**
 * Update status of the pending sorese transaction, to support poking
  *
  */
-int osql_checkboard_update_status(unsigned long long rqid, uuid_t uuid,
+int osql_checkboard_update_status(uuid_t uuid,
                                   int status, int timestamp);
 /**
  * Reset fields when a session is retried

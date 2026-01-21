@@ -52,7 +52,7 @@ struct sess_impl {
 
 static void _destroy_session(osql_sess_t **psess);
 static int handle_buf_sorese(osql_sess_t *psess);
-static osql_sess_t *_osql_sess_create(osql_sess_t *sess, char *tzname, int type, unsigned long long rqid, uuid_t uuid,
+static osql_sess_t *_osql_sess_create(osql_sess_t *sess, char *tzname, int type, uuid_t uuid,
                                       const char *host, int is_reorder_on, int is_final);
 
 /**
@@ -61,7 +61,7 @@ static osql_sess_t *_osql_sess_create(osql_sess_t *sess, char *tzname, int type,
  * Returns created object if success, NULL otherwise
  *
  */
-osql_sess_t *osql_sess_create(const char *sql, int sqlen, char *tzname, int type, unsigned long long rqid, uuid_t uuid,
+osql_sess_t *osql_sess_create(const char *sql, int sqlen, char *tzname, int type, uuid_t uuid,
                               const char *host, int is_reorder_on, int is_final)
 {
     osql_sess_t *sess = NULL;
@@ -79,14 +79,14 @@ osql_sess_t *osql_sess_create(const char *sql, int sqlen, char *tzname, int type
     strncpy0((char *)sess->sql, sql, sqlen + 1);
     sess->impl->embedded_sql = 1;
 
-    return _osql_sess_create(sess, tzname, type, rqid, uuid, host, is_reorder_on, is_final);
+    return _osql_sess_create(sess, tzname, type, uuid, host, is_reorder_on, is_final);
 }
 
 /**
  * Same as osql_sess_create, but sql is already allocated
  *
  */
-osql_sess_t *osql_sess_create_socket(const char *sql, char *tzname, int type, unsigned long long rqid, uuid_t uuid,
+osql_sess_t *osql_sess_create_socket(const char *sql, char *tzname, int type, uuid_t uuid,
                                      const char *host, int is_reorder_on, int is_final)
 {
     osql_sess_t *sess = NULL;
@@ -103,7 +103,7 @@ osql_sess_t *osql_sess_create_socket(const char *sql, char *tzname, int type, un
     sess->impl->embedded_sql = 0;
     sess->impl->socket = 1;
 
-    return _osql_sess_create(sess, tzname, type, rqid, uuid, host, is_reorder_on, is_final);
+    return _osql_sess_create(sess, tzname, type, uuid, host, is_reorder_on, is_final);
 }
 
 
@@ -274,8 +274,8 @@ char *osql_sess_info(osql_sess_t *sess)
     char *ret = malloc(OSQL_SESS_INFO_LEN);
 
     if (ret) {
-        snprintf(ret, OSQL_SESS_INFO_LEN, "%s, %llx %s %s%s",
-                 osql_sorese_type_to_str(sess->type), sess->rqid,
+        snprintf(ret, OSQL_SESS_INFO_LEN, "%s, %s %s%s",
+                 osql_sorese_type_to_str(sess->type),
                  comdb2uuidstr(sess->uuid, us),
                  sess->target.host == gbl_myhostname ? "REMOTE " : "LOCAL ",
                  sess->target.host);
@@ -307,10 +307,9 @@ int osql_prepare(const char *dist_txnid, const char *coordinator_dbname, const c
                  const char *coordinator_master)
 {
     int dispatch = 0, rc;
-    unsigned long long rqid;
     uuid_t uuid;
 
-    if ((rc = osql_sanction_disttxn(dist_txnid, &rqid, &uuid, coordinator_dbname, coordinator_tier,
+    if ((rc = osql_sanction_disttxn(dist_txnid, &uuid, coordinator_dbname, coordinator_tier,
                                     coordinator_master)) == 0) {
         logmsg(LOGMSG_INFO, "%s: coordinator beat participant prepare dist-txn %s\n", __func__, dist_txnid);
         return 0;
@@ -360,10 +359,9 @@ int osql_prepare(const char *dist_txnid, const char *coordinator_dbname, const c
 int osql_discard(const char *dist_txnid)
 {
     int close = 0, rc;
-    unsigned long long rqid;
     uuid_t uuid;
 
-    if ((rc = osql_cancel_disttxn(dist_txnid, &rqid, &uuid)) == 0) {
+    if ((rc = osql_cancel_disttxn(dist_txnid, &uuid)) == 0) {
         logmsg(LOGMSG_INFO, "%s: coordinator beat participant prepare dist-txn %s\n", __func__, dist_txnid);
         return 0;
     }
@@ -488,7 +486,7 @@ int osql_sess_rcvop(uuid_t uuid, int type, void *data, int datalen, int *found)
 
 failed_stream:
     if (is_msg_done && perr)
-        osql_comm_signal_sqlthr_rc(&sess->target, OSQL_RQID_USE_UUID, uuid, 0, &sess->xerr, NULL, 0);
+        osql_comm_signal_sqlthr_rc(&sess->target, uuid, 0, &sess->xerr, NULL, 0);
 
     /* release the session */
     osql_repository_put(sess);
@@ -520,7 +518,7 @@ int osql_sess_rcvop_socket(osql_sess_t *sess, int type, void *data, int datalen,
     if (*is_msg_done && perr) {
         if (debug_switch_test_sync_osql_cancel())
             poll(NULL, 0, 1000);
-        osql_comm_signal_sqlthr_rc(&sess->target, sess->rqid, sess->uuid, 0, &sess->xerr, NULL, 0);
+        osql_comm_signal_sqlthr_rc(&sess->target, sess->uuid, 0, &sess->xerr, NULL, 0);
         sess->is_cancelled = 1;
         return 0;
     }
@@ -582,7 +580,7 @@ int osql_sess_try_terminate(osql_sess_t *psess, const char *host)
     keep_sess = (sess->clients > 0);
 
 done:
-    logmsg(LOGMSG_INFO, "%s: rqid=%llx, uuid=%s %s\n", __func__, psess->rqid,
+    logmsg(LOGMSG_INFO, "%s: uuid=%s %s\n", __func__,
            comdb2uuidstr(psess->uuid, us),
            keep_sess ? "was already dispatched" : "can be cancelled");
     Pthread_mutex_unlock(&sess->mtx);
@@ -641,7 +639,7 @@ static int handle_buf_sorese(osql_sess_t *psess)
     /* construct a block transaction */
     if (osql_bplog_build_sorese_req(&p_buf, &p_buf_end, psess->sql,
                                     strlen(psess->sql) + 1, psess->tzname,
-                                    psess->type, psess->rqid, psess->uuid)) {
+                                    psess->type, psess->uuid)) {
         logmsg(LOGMSG_ERROR, "bug in code %s:%d", __func__, __LINE__);
         return rc;
     }
@@ -651,19 +649,19 @@ static int handle_buf_sorese(osql_sess_t *psess)
                          REQ_OFFLOAD, NULL, 0, 0, NULL);
 
     if (rc) {
-        signal_replicant_error(&psess->target, psess->rqid, psess->uuid,
+        signal_replicant_error(&psess->target, psess->uuid,
                                ERR_NOMASTER, "failed tp dispatch, queue full");
         osql_sess_close(&psess, 1);
     }
     return rc;
 }
 
-static osql_sess_t *_osql_sess_create(osql_sess_t *sess, char *tzname, int type, unsigned long long rqid, uuid_t uuid,
+static osql_sess_t *_osql_sess_create(osql_sess_t *sess, char *tzname, int type, uuid_t uuid,
                                       const char *host, int is_reorder_on, int is_final)
 {
 #ifdef TEST_QSQL_REQ
     uuidstr_t us;
-    logmsg(LOGMSG_INFO, "%s: Opening request %llu %s\n", __func__, rqid,
+    logmsg(LOGMSG_INFO, "%s: Opening request %s\n", __func__,
            comdb2uuidstr(uuid, us));
 #endif
 
@@ -680,7 +678,6 @@ static osql_sess_t *_osql_sess_create(osql_sess_t *sess, char *tzname, int type,
     /* init participant mutex */
     Pthread_mutex_init(&sess->participant_lk, NULL);
 
-    sess->rqid = rqid;
     comdb2uuidcpy(sess->uuid, uuid);
     sess->type = type;
     sess->target.host = intern(host);
@@ -697,7 +694,7 @@ static osql_sess_t *_osql_sess_create(osql_sess_t *sess, char *tzname, int type,
     init_bplog_net(&sess->target);
 
     /* create bplog so we can collect ops from sql thread */
-    sess->tran = osql_bplog_create(sess->rqid == OSQL_RQID_USE_UUID, sess->is_reorder_on);
+    sess->tran = osql_bplog_create(1, sess->is_reorder_on);
     if (!sess->tran) {
         logmsg(LOGMSG_ERROR, "%s Unable to create new bplog\n", __func__);
         _destroy_session(&sess);

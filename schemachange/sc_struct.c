@@ -199,7 +199,7 @@ size_t schemachange_packed_size(struct schema_change_type *s)
     s->newcsc2_len = (s->newcsc2) ? strlen(s->newcsc2) + 1 : 0;
 
     s->packed_len =
-        sizeof(s->kind) + sizeof(s->rqid) + sizeof(s->uuid) +
+        sizeof(s->kind) + sizeof(s->uuid) +
         sizeof(s->tablename_len) + s->tablename_len + sizeof(s->fname_len) +
         s->fname_len + sizeof(s->aname_len) + s->aname_len +
         sizeof(s->avgitemsz) + sizeof(s->newdtastripe) + sizeof(s->blobstripe) +
@@ -260,7 +260,6 @@ int pack_schema_change_protobuf(struct schema_change_type *s, void **packed_sc, 
     s->newcsc2_for_default_cons_q_len = (s->newcsc2_for_default_cons_q) ? strlen(s->newcsc2_for_default_cons_q) + 1 : 0;
 
     sc.kind = s->kind;
-    sc.rqid = s->rqid;
     sc.uuid.data = s->uuid;
     sc.uuid.len = sizeof(s->uuid);
     sc.tablename = s->tablename;
@@ -452,7 +451,6 @@ int unpack_schema_change_protobuf(struct schema_change_type *s, void *packed_sc,
 
     s->sc_version = sc->version;
     s->kind = sc->kind;
-    s->rqid = sc->rqid;
     if (sc->uuid.len > 0) {
         memcpy(s->uuid, sc->uuid.data, sizeof(s->uuid));
     } else {
@@ -602,8 +600,6 @@ void *buf_put_schemachange(struct schema_change_type *s, void *p_buf, void *p_bu
     if (p_buf >= p_buf_end) return NULL;
 
     p_buf = buf_put(&s->kind, sizeof(s->kind), p_buf, p_buf_end);
-
-    p_buf = buf_put(&s->rqid, sizeof(s->rqid), p_buf, p_buf_end);
 
     p_buf = buf_no_net_put(&s->uuid, sizeof(s->uuid), p_buf, p_buf_end);
 
@@ -807,8 +803,6 @@ void *buf_get_schemachange_v1(struct schema_change_type *s, void *p_buf,
 
     if (p_buf >= p_buf_end) return NULL;
 
-    p_buf = (uint8_t *)buf_get(&s->rqid, sizeof(s->rqid), p_buf, p_buf_end);
-
     p_buf =
         (uint8_t *)buf_no_net_get(&s->uuid, sizeof(s->uuid), p_buf, p_buf_end);
 
@@ -1002,8 +996,6 @@ void *buf_get_schemachange_v2(struct schema_change_type *s,
     if (p_buf >= p_buf_end) return NULL;
 
     p_buf = (uint8_t *)buf_get(&s->kind, sizeof(s->kind), p_buf, p_buf_end);
-
-    p_buf = (uint8_t *)buf_get(&s->rqid, sizeof(s->rqid), p_buf, p_buf_end);
 
     p_buf =
         (uint8_t *)buf_no_net_get(&s->uuid, sizeof(s->uuid), p_buf, p_buf_end);

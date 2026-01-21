@@ -1239,8 +1239,6 @@ enum OSQL_REQ_TYPE {
 #define IQ_HAS_SNAPINFO(iq) ((iq)->sorese && (iq)->sorese->snap_info)
 #define IQ_HAS_SNAPINFO_KEY(iq) (IQ_HAS_SNAPINFO(iq) && IQ_SNAPINFO(iq)->keylen > 0)
 
-/* Magic rqid value that means "please use uuid instead" */
-#define OSQL_RQID_USE_UUID 1
 typedef struct blocksql_tran blocksql_tran_t;
 typedef struct sess_impl sess_impl_t;
 
@@ -1258,7 +1256,6 @@ typedef struct osql_target osql_target_t;
 struct osql_sess {
 
     /* request part */
-    unsigned long long rqid; /* identifies the client request session */
     uuid_t uuid;
     snap_uid_t *snap_info;
     sess_impl_t *impl;

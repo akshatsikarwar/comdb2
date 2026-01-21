@@ -795,7 +795,7 @@ static void make_tag(struct ireq *iq, char *tag, int taglen)
 {
     uuidstr_t us;
     if (iq->sorese) {
-        snprintf(tag, taglen, "[%llu:%s]", iq->sorese->rqid, comdb2uuidstr(iq->sorese->uuid, us));
+        snprintf(tag, taglen, "[%s]", comdb2uuidstr(iq->sorese->uuid, us));
     } else if (iq->corigin[0] != '\0') {
         snprintf(tag, taglen, "[%s]", iq->corigin);
     } else {

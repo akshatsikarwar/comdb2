@@ -155,7 +155,6 @@ enum schema_change_kind {
 struct schema_change_type {
     /*  ==========    persistent members ========== */
     enum schema_change_kind kind;
-    unsigned long long rqid;
     uuid_t uuid;
     size_t tablename_len;
     char tablename[MAXTABLELEN];    /* name of table/queue */

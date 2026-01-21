@@ -428,7 +428,7 @@ void osql_bplog_close(blocksql_tran_t **ptran)
 }
 
 static void setup_reorder_key(blocksql_tran_t *tran, int type,
-                              osql_sess_t *sess, unsigned long long rqid,
+                              osql_sess_t *sess,
                               char *rpl, oplog_key_t *key)
 {
     char *tablename = tran->tablename;
@@ -566,7 +566,7 @@ static int _pre_process_saveop(osql_sess_t *sess, blocksql_tran_t *tran,
         assert(sess->dist_timestamp > 0);
         Pthread_mutex_lock(&sess->participant_lk);
         sess->is_participant = 1;
-        sess->is_sanctioned = osql_register_disttxn(sess->dist_txnid, sess->rqid, sess->uuid, &sess->coordinator_dbname,
+        sess->is_sanctioned = osql_register_disttxn(sess->dist_txnid, sess->uuid, &sess->coordinator_dbname,
                                                     &sess->coordinator_tier, &sess->coordinator_master);
         Pthread_mutex_unlock(&sess->participant_lk);
         break;
@@ -638,7 +638,7 @@ int osql_bplog_saveop(osql_sess_t *sess, blocksql_tran_t *tran, char *rpl,
 
     struct temp_table *tmptbl = tran->db;
     if (tran->is_reorder_on) {
-        setup_reorder_key(tran, type, sess, sess->rqid, rpl, &key);
+        setup_reorder_key(tran, type, sess, rpl, &key);
         if (tran->last_is_ins && tran->db_ins) { // insert into ins temp table
             tmptbl = tran->db_ins;
         }
@@ -658,7 +658,7 @@ int osql_bplog_saveop(osql_sess_t *sess, blocksql_tran_t *tran, char *rpl,
         tran->seq++;
         if (gbl_osqlpfault_threads) {
             osql_page_prefault(rpl, rplen, &(tran->last_db),
-                               &sess->iq->osql_step_ix, sess->rqid, sess->uuid,
+                               &sess->iq->osql_step_ix, sess->uuid,
                                tran->seq);
         }
     }
@@ -676,21 +676,8 @@ int osql_bplog_saveop(osql_sess_t *sess, blocksql_tran_t *tran, char *rpl,
 void osql_bplog_set_blkseq(osql_sess_t *sess, struct ireq *iq)
 {
     iq->have_blkseq = 1;
-    if (sess->rqid == OSQL_RQID_USE_UUID) {
-        memcpy(iq->seq, sess->uuid, sizeof(uuid_t));
-        iq->seqlen = sizeof(uuid_t);
-    } else {
-        struct packedreq_seq seq;
-        int *p_rqid = (int *)&sess->rqid;
-        int seed;
-        seq.seq1 = p_rqid[0];
-        seq.seq2 = p_rqid[1];
-        seed = seq.seq1 ^ seq.seq2;
-        seq.seq3 = rand_r((unsigned int *)&seed);
-
-        memcpy(iq->seq, &seq, 3 * sizeof(int));
-        iq->seqlen = 3 * sizeof(int);
-    }
+    memcpy(iq->seq, sess->uuid, sizeof(uuid_t));
+    iq->seqlen = sizeof(uuid_t);
 }
 
 /**
@@ -704,7 +691,7 @@ void osql_bplog_set_blkseq(osql_sess_t *sess, struct ireq *iq)
 int osql_bplog_build_sorese_req(uint8_t **pp_buf_start,
                                 const uint8_t **pp_buf_end, const char *sqlq,
                                 int sqlqlen, const char *tzname, int reqtype,
-                                unsigned long long rqid, uuid_t uuid)
+                                uuid_t uuid)
 {
     struct req_hdr req_hdr;
     struct block_req req;
@@ -955,12 +942,9 @@ static int process_this_session(
 
     iq->queryid = osql_sess_queryid(sess);
     if (gbl_max_time_per_txn_ms)
-        iq->txn_ttl_ms = gettimeofday_ms() + gbl_max_time_per_txn_ms; 
+        iq->txn_ttl_ms = gettimeofday_ms() + gbl_max_time_per_txn_ms;
 
-    if (sess->rqid != OSQL_RQID_USE_UUID)
-        reqlog_set_rqid(iq->reqlogger, &sess->rqid, sizeof(unsigned long long));
-    else
-        reqlog_set_rqid(iq->reqlogger, sess->uuid, sizeof(sess->uuid));
+    reqlog_set_rqid(iq->reqlogger, sess->uuid, sizeof(sess->uuid));
     reqlog_set_event(iq->reqlogger, EV_TXN);
 
 #if DEBUG_REORDER
@@ -987,8 +971,8 @@ static int process_this_session(
     if (rc == IX_NOTFND) {
         uuidstr_t us;
         comdb2uuidstr(sess->uuid, us);
-        logmsg(LOGMSG_ERROR, "%s: session %llx %s has no update rows?\n",
-               __func__, sess->rqid, us);
+        logmsg(LOGMSG_ERROR, "%s: session %s has no update rows?\n",
+               __func__, us);
     }
 
     oplog_key_t *opkey = (oplog_key_t *)bdb_temp_table_key(dbc);

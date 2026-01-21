@@ -287,7 +287,6 @@ void init_sqlclntstate(sqlclntstate *clnt, char *tid)
     start_internal_sql_clnt(clnt);
     clnt->dbtran.mode = TRANLEVEL_SOSQL;
 
-    clnt->osql.rqid = OSQL_RQID_USE_UUID;
     comdb2uuidcpy(clnt->osql.uuid, (unsigned char *)tid);
 
     clnt->osql.timings.query_received = osql_log_time();
@@ -346,7 +345,6 @@ int fdb_svc_trans_begin(char *tid, enum transaction_level lvl, int flags, int se
 
     /* we keep the uuid in osql_sock_start */
     /* register transaction */
-    clnt->osql.rqid = OSQL_RQID_USE_UUID;
     comdb2uuidcpy(clnt->osql.uuid, (unsigned char *)tid);
 
     if (osql_register_sqlthr(clnt, OSQL_SOCK_REQ /* not needed actually*/)) {

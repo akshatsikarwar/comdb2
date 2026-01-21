@@ -198,7 +198,6 @@ int start_schema_change_tran(struct ireq *iq, tran_type *trans)
             if (stored_sc && !IS_UPRECS(stored_sc) &&
                 IS_SC_DBTYPE_TAGGED_TABLE(stored_sc)) {
                 if (comdb2uuidcmp(stored_sc->uuid, iq->sorese->uuid) == 0) {
-                    s->rqid = stored_sc->rqid;
                     comdb2uuidcpy(s->uuid, stored_sc->uuid);
                     s->resume = 1;
                     uuidstr_t us;

@@ -99,7 +99,7 @@ int osql_bplog_saveop(osql_sess_t *sess, blocksql_tran_t *tran, char *rpl,
 int osql_bplog_build_sorese_req(uint8_t **p_buf_start,
                                 const uint8_t **pp_buf_end, const char *sqlq,
                                 int sqlqlen, const char *tzname, int reqtype,
-                                unsigned long long rqid, uuid_t uuid);
+                                uuid_t uuid);
 
 /**
  * Set proper blkseq from session to iq
