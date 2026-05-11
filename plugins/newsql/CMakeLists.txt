@@ -30,11 +30,23 @@ include_directories(
   ${CMAKE_CURRENT_BINARY_DIR}
   ${OPENSSL_INCLUDE_DIR}
   ${PROTOBUF-C_INCLUDE_DIR}
+  ${CapnProto_INCLUDE_DIRS}
 )
-set(NEWSQL_SRCS newsql.c newsql_evbuffer.c)
+set(NEWSQL_SRCS
+  newsql.c
+  newsql_evbuffer.c
+  ${PROJECT_SOURCE_DIR}/protobuf/capnp_codec.cpp
+  ${PROJECT_BINARY_DIR}/protobuf/sqlquery.capnp.c++
+  ${PROJECT_BINARY_DIR}/protobuf/sqlresponse.capnp.c++
+)
+set_source_files_properties(
+  ${PROJECT_BINARY_DIR}/protobuf/sqlquery.capnp.c++
+  ${PROJECT_BINARY_DIR}/protobuf/sqlresponse.capnp.c++
+  PROPERTIES GENERATED TRUE
+)
 add_plugin(newsql STATIC "${NEWSQL_SRCS}")
-add_dependencies(newsql sqlite) # Wait for parse.h
-target_link_libraries(newsql PUBLIC net)
+add_dependencies(newsql sqlite capnp_schemas) # Wait for parse.h and capnp headers
+target_link_libraries(newsql PUBLIC net CapnProto::capnp)
 if (COMDB2_BBCMAKE)
   comdb2_lib_target(newsql)
 endif()

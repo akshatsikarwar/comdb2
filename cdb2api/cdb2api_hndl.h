@@ -226,6 +226,7 @@ struct cdb2_hndl {
     int protobuf_size;
     int protobuf_offset;
     ProtobufCAllocator *allocator;
+    int use_capnproto; /* 1 = encode/decode with Cap'n Proto instead of protobuf */
     int max_auto_consume_rows;
     struct cdb2_hndl *fdb_hndl;
     int is_child_hndl;

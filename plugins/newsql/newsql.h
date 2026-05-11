@@ -19,6 +19,7 @@
 
 #include <sqlquery.pb-c.h>
 #include <sqlresponse.pb-c.h>
+#include "capnp_codec.h"
 
 struct sqlclntstate;
 struct newsql_appdata;
@@ -64,7 +65,8 @@ typedef enum {
     CDB2QUERY *query;                                                          \
     CDB2SQLQUERY *sqlquery;                                                    \
     int8_t send_intrans_response;                                              \
-    int8_t protocol_version;                                              \
+    int8_t protocol_version;                                                   \
+    int8_t use_capnproto;   /* 1 = connection is using Cap'n Proto encoding */ \
     struct newsql_postponed_data *postponed;                                   \
     struct sql_col_info col_info;
 

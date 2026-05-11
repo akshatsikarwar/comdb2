@@ -110,11 +110,14 @@ static void inline free_pb_cdb2query(struct sqlclntstate *clnt, CDB2QUERY *query
 
     appdata = clnt->appdata;
 
-    /* clnt->externalAuthUser and appdata->sqlquery point into the protobuf memory.
-       ensure that they are cleared before freeing the memory */
+    /* clnt->externalAuthUser and appdata->sqlquery point into the protobuf/capnp
+       memory – ensure they are cleared before freeing */
     appdata->sqlquery = NULL;
     clnt->externalAuthUser = NULL;
-    cdb2__query__free_unpacked(query, &pb_alloc);
+    if (appdata->use_capnproto)
+        capnp_free_query(query);
+    else
+        cdb2__query__free_unpacked(query, &pb_alloc);
 }
 
 static void free_newsql_appdata_evbuffer(struct newsql_appdata_evbuffer *appdata)
@@ -356,21 +359,29 @@ static void process_dbinfo_int(struct get_hosts_evbuffer_arg *arg)
     response.has_sync_mode = 1;
     response.sync_mode = sync_state_to_protobuf(thedb->rep_sync);
 
-    int len = cdb2__dbinforesponse__get_packed_size(&response);
     struct newsqlheader hdr = {0};
     hdr.type = htonl(RESPONSE_HEADER__DBINFO_RESPONSE);
-    hdr.length = htonl(len);
-    uint8_t *out = alloca(len);
-    cdb2__dbinforesponse__pack(&response, out);
-
-    struct iovec vec[2];
-    vec[0].iov_base = &hdr;
-    vec[0].iov_len = sizeof(hdr);
-    vec[1].iov_base = out;
-    vec[1].iov_len = len;
-
     struct evbuffer *buf = sql_wrbuf(appdata->writer);
-    evbuffer_add_iovec(buf, vec, 2);
+
+    if (appdata->use_capnproto) {
+        uint8_t *capnp_out = NULL;
+        size_t capnp_len = capnp_pack_dbinforesponse(&response, &capnp_out);
+        hdr.length = htonl((int)capnp_len);
+        evbuffer_add(buf, &hdr, sizeof(hdr));
+        if (capnp_len && capnp_out) evbuffer_add(buf, capnp_out, capnp_len);
+        free(capnp_out);
+    } else {
+        int len = cdb2__dbinforesponse__get_packed_size(&response);
+        hdr.length = htonl(len);
+        uint8_t *out = alloca(len);
+        cdb2__dbinforesponse__pack(&response, out);
+        struct iovec vec[2];
+        vec[0].iov_base = &hdr;
+        vec[0].iov_len = sizeof(hdr);
+        vec[1].iov_base = out;
+        vec[1].iov_len = len;
+        evbuffer_add_iovec(buf, vec, 2);
+    }
 }
 
 static void process_dbinfo(int dummyfd, short what, void *data)
@@ -864,14 +875,23 @@ sendresponse:
     }
 
     response.rcode = rcode;
-    int len = cdb2__disttxnresponse__get_packed_size(&response);
     struct newsqlheader hdr = {0};
     hdr.type = htonl(RESPONSE_HEADER__DISTTXN_RESPONSE);
-    hdr.length = htonl(len);
-    uint8_t out[len];
-    cdb2__disttxnresponse__pack(&response, out);
-    evbuffer_add(buf, &hdr, sizeof(hdr));
-    evbuffer_add(buf, out, len);
+    if (appdata->use_capnproto) {
+        uint8_t *capnp_out = NULL;
+        size_t capnp_len = capnp_pack_disttxnresponse(&response, &capnp_out);
+        hdr.length = htonl((int)capnp_len);
+        evbuffer_add(buf, &hdr, sizeof(hdr));
+        if (capnp_len && capnp_out) evbuffer_add(buf, capnp_out, capnp_len);
+        free(capnp_out);
+    } else {
+        int len = cdb2__disttxnresponse__get_packed_size(&response);
+        hdr.length = htonl(len);
+        uint8_t out[len];
+        cdb2__disttxnresponse__pack(&response, out);
+        evbuffer_add(buf, &hdr, sizeof(hdr));
+        evbuffer_add(buf, out, len);
+    }
     event_base_once(appdata->base, appdata->fd, EV_WRITE, wr_dbinfo, appdata, NULL);
 }
 
@@ -1054,6 +1074,7 @@ static void process_newsql_payload(struct newsql_appdata_evbuffer *appdata, CDB2
     }
     switch (appdata->hdr.type) {
     case CDB2_REQUEST_TYPE__CDB2QUERY:
+    case CAPNP_CDB2QUERY:
         process_cdb2query(appdata, query);
         break;
     case CDB2_REQUEST_TYPE__RESET:
@@ -1103,7 +1124,18 @@ payload:
     if (appdata->hdr.length) {
         int len = appdata->hdr.length;
         void *data = evbuffer_pullup(appdata->rd_buf, len);
-        if (data == NULL || (query = cdb2__query__unpack(&pb_alloc, len, data)) == NULL) {
+        if (data == NULL) {
+            free_newsql_appdata_evbuffer(appdata);
+            return;
+        }
+        if (appdata->hdr.type == CAPNP_CDB2QUERY) {
+            appdata->use_capnproto = 1;
+            query = capnp_unpack_query(data, len);
+        } else {
+            appdata->use_capnproto = 0;
+            query = cdb2__query__unpack(&pb_alloc, len, data);
+        }
+        if (query == NULL) {
             free_newsql_appdata_evbuffer(appdata);
             return;
         }
@@ -1152,7 +1184,10 @@ static void *newsql_destroy_stmt_evbuffer(struct sqlclntstate *clnt, void *arg)
     if (appdata->query == stmt->query) {
         appdata->query = NULL;
     }
-    cdb2__query__free_unpacked(stmt->query, &pb_alloc);
+    if (appdata->use_capnproto)
+        capnp_free_query(stmt->query);
+    else
+        cdb2__query__free_unpacked(stmt->query, &pb_alloc);
     stmt->query = NULL;
     free(stmt);
     return NULL;
@@ -1297,15 +1332,51 @@ static int newsql_pack(struct sqlwriter *sqlwriter, void *data)
 static int newsql_write_evbuffer(struct sqlclntstate *clnt, int type, int state,
                                  const CDB2SQLRESPONSE *resp, int flush)
 {
-    int response_len;
+    struct newsql_appdata_evbuffer *appdata = clnt->appdata;
 
-    if (resp && resp->response_type == RESPONSE_TYPE__RAW_DATA) {
-        response_len = sizeof(int) + resp->sqlite_row.len;
+    if (appdata->use_capnproto) {
+        /* Cap'n Proto serialization path.
+           RAW_DATA responses are written as raw binary (error_code + sqlite_row)
+           regardless of the protocol, because the client reads them directly. */
+        uint8_t *capnp_buf = NULL;
+        size_t capnp_len = 0;
+
+        if (resp && resp->response_type == RESPONSE_TYPE__RAW_DATA) {
+            /* Keep raw-data responses as-is: 4-byte error_code + sqlite row bytes */
+            capnp_len = sizeof(int) + resp->sqlite_row.len;
+        } else if (resp) {
+            capnp_len = capnp_pack_sqlresponse(resp, &capnp_buf);
+            if (capnp_len == 0) return -1;
+        }
+
+        if (type) {
+            struct newsqlheader hdr;
+            hdr.type = htonl(type);
+            hdr.compression = 0;
+            hdr.state = htonl(state);
+            hdr.length = htonl((int)capnp_len);
+            sql_append_packed(appdata->writer, &hdr, sizeof(hdr));
+        }
+
+        if (resp && resp->response_type == RESPONSE_TYPE__RAW_DATA) {
+            sql_append_packed(appdata->writer, &resp->error_code, sizeof(int));
+            sql_append_packed(appdata->writer, resp->sqlite_row.data,
+                              resp->sqlite_row.len);
+        } else if (capnp_buf) {
+            sql_append_packed(appdata->writer, capnp_buf, capnp_len);
+            free(capnp_buf);
+        }
+
+        return flush ? sql_flush(appdata->writer) : 0;
     }
+
+    /* Original protobuf serialization path */
+    int response_len;
+    if (resp && resp->response_type == RESPONSE_TYPE__RAW_DATA)
+        response_len = sizeof(int) + resp->sqlite_row.len;
     else
         response_len = resp ? cdb2__sqlresponse__get_packed_size(resp) : 0;
 
-    struct newsql_appdata_evbuffer *appdata = clnt->appdata;
     struct newsql_pack_arg arg = {0};
     arg.resp_len = response_len;
     struct newsqlheader hdr;

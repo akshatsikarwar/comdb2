@@ -47,6 +47,7 @@
 
 #include "sqlquery.pb-c.h"
 #include "sqlresponse.pb-c.h"
+#include "capnp_codec.h"
 
 #include "str_util.h" /* QUOTE */
 
@@ -157,6 +158,11 @@ static int cdb2_alarm_unread_socket_data = 0;
 static int cdb2_alarm_unread_socket_data_set_from_env = 0;
 static int cdb2_max_discard_records = 1;
 static int cdb2_max_discard_records_set_from_env = 0;
+/* Use Cap'n Proto wire encoding instead of protobuf-c for new connections.
+   Set CDB2_USE_CAPNPROTO=1 in the environment to enable, or call
+   cdb2_init_capnproto() before opening any handles. */
+static int cdb2_use_capnproto = 0;
+
 /* flattens column values in protobuf structure */
 #ifdef CDB2_LEGACY_DEFAULTS
 static int cdb2_flat_col_vals = 0;
@@ -176,6 +182,49 @@ static int cdb2_non_threaded_identity = 0;
 static int cdb2_non_threaded_identity_from_env = 0;
 
 static int CDB2_REQUEST_FP = 0;
+
+/* ------------------------------------------------------------------ */
+/* Cap'n Proto helper wrappers                                         */
+/* ------------------------------------------------------------------ */
+
+struct cdb2_hndl; /* forward decl for inline helpers below */
+
+static inline CDB2SQLRESPONSE *
+cdb2api_unpack_sqlresponse(struct cdb2_hndl *h, int len, const uint8_t *buf)
+{
+    if (h && h->use_capnproto)
+        return capnp_unpack_sqlresponse(buf, len);
+    return cdb2__sqlresponse__unpack(h ? h->allocator : NULL, len, buf);
+}
+
+static inline void
+cdb2api_free_sqlresponse(struct cdb2_hndl *h, CDB2SQLRESPONSE *resp)
+{
+    if (!resp) return;
+    if (h && h->use_capnproto)
+        capnp_free_response(resp);
+    else
+        cdb2__sqlresponse__free_unpacked(resp, h ? h->allocator : NULL);
+}
+
+static inline CDB2DBINFORESPONSE *
+cdb2api_unpack_dbinforesponse(struct cdb2_hndl *h, int len, const uint8_t *buf)
+{
+    if (h && h->use_capnproto)
+        return capnp_unpack_dbinforesponse(buf, len);
+    return cdb2__dbinforesponse__unpack(NULL, len, buf);
+}
+
+static inline CDB2DISTTXNRESPONSE *
+cdb2api_unpack_disttxnresponse(struct cdb2_hndl *h, int len,
+                                const uint8_t *buf)
+{
+    if (h && h->use_capnproto)
+        return capnp_unpack_disttxnresponse(buf, len);
+    return cdb2__disttxnresponse__unpack(NULL, len, buf);
+}
+
+/* ------------------------------------------------------------------ */
 
 static int log_calls = 0;
 #define LOG_CALL(fmt, ...)                                                                                             \
@@ -1659,6 +1708,7 @@ static void read_comdb2db_environment_cfg(cdb2_hndl_tp *hndl, const char *comdb2
         process_env_var_int("COMDB2_FEATURE_PROTOBUF_HEURISTIC", &cdb2_protobuf_heuristic,
                             &cdb2_protobuf_heuristic_set_from_env);
         process_env_var_int("COMDB2_FEATURE_FLAT_COL_VALS", &cdb2_flat_col_vals, &cdb2_flat_col_vals_set_from_env);
+        process_env_var_int("CDB2_USE_CAPNPROTO", &cdb2_use_capnproto, &cdb2_use_capnproto);
         process_env_var_int("COMDB2_FEATURE_USE_BMSD", &cdb2_use_bmsd, &cdb2_use_bmsd_set_from_env);
         process_env_var_int("COMDB2_FEATURE_COMDB2DB_FALLBACK", &cdb2_comdb2db_fallback,
                             &cdb2_comdb2db_fallback_set_from_env);
@@ -4251,13 +4301,13 @@ retry:
 
     if (hdr.type == RESPONSE_HEADER__SQL_RESPONSE_TRACE) {
         CDB2SQLRESPONSE *response =
-            cdb2__sqlresponse__unpack(NULL, hdr.length, *buf);
+            cdb2api_unpack_sqlresponse(hndl, hdr.length, *buf);
         if (response->response_type == RESPONSE_TYPE__SP_TRACE) {
             fprintf(stdout, "%s\n", response->info_string);
-            cdb2__sqlresponse__free_unpacked(response, NULL);
+            cdb2api_free_sqlresponse(hndl, response);
         } else {
             fprintf(stdout, "%s", response->info_string);
-            cdb2__sqlresponse__free_unpacked(response, NULL);
+            cdb2api_free_sqlresponse(hndl, response);
             char cmd[250];
             if (fgets(cmd, 250, stdin) == NULL ||
                 strncasecmp(cmd, "quit", 4) == 0) {
@@ -4268,13 +4318,18 @@ retry:
             }
             CDB2QUERY query = CDB2__QUERY__INIT;
             query.spcmd = cmd;
-            int loc_len = cdb2__query__get_packed_size(&query);
-            unsigned char *locbuf = malloc(loc_len + 1);
-
-            cdb2__query__pack(&query, locbuf);
-
-            struct newsqlheader hdr = {.type =
-                                           ntohl(CDB2_REQUEST_TYPE__CDB2QUERY),
+            int loc_len;
+            unsigned char *locbuf = NULL;
+            if (hndl->use_capnproto)
+                loc_len = (int)capnp_pack_query(&query, (uint8_t **)&locbuf);
+            else {
+                loc_len = cdb2__query__get_packed_size(&query);
+                locbuf = malloc(loc_len + 1);
+                cdb2__query__pack(&query, locbuf);
+            }
+            int hdr_type_sp = hndl->use_capnproto ? CAPNP_CDB2QUERY
+                                                  : CDB2_REQUEST_TYPE__CDB2QUERY;
+            struct newsqlheader hdr = {.type = ntohl(hdr_type_sp),
                                        .compression = ntohl(0),
                                        .length = ntohl(loc_len)};
 
@@ -4332,7 +4387,7 @@ static void clear_responses(cdb2_hndl_tp *hndl)
 {
     free_raw_response(hndl);
     if (hndl->lastresponse) {
-        cdb2__sqlresponse__free_unpacked(hndl->lastresponse, hndl->allocator);
+        cdb2api_free_sqlresponse(hndl, hndl->lastresponse);
         if (hndl->protobuf_size)
             hndl->protobuf_offset = 0;
         hndl->lastresponse = NULL;
@@ -4341,7 +4396,7 @@ static void clear_responses(cdb2_hndl_tp *hndl)
     }
 
     if (hndl->firstresponse) {
-        cdb2__sqlresponse__free_unpacked(hndl->firstresponse, NULL);
+        cdb2api_free_sqlresponse(hndl, hndl->firstresponse);
         hndl->firstresponse = NULL;
         free((void *)hndl->first_buf);
         hndl->first_buf = NULL;
@@ -4386,13 +4441,19 @@ int cdb2_send_2pc(cdb2_hndl_tp *hndl, char *dbname, char *pname, char *ptier, ch
     distquery.disttxn = &disttxn;
     query.disttxn = &distquery;
 
-    int len = cdb2__query__get_packed_size(&query);
-    unsigned char *buf = malloc(len + 1);
-
-    cdb2__query__pack(&query, buf);
-
+    unsigned char *buf = NULL;
+    int len;
+    if (hndl->use_capnproto)
+        len = (int)capnp_pack_query(&query, (uint8_t **)&buf);
+    else {
+        len = cdb2__query__get_packed_size(&query);
+        buf = malloc(len + 1);
+        cdb2__query__pack(&query, buf);
+    }
+    int hdr_type_dt = hndl->use_capnproto ? CAPNP_CDB2QUERY
+                                          : CDB2_REQUEST_TYPE__CDB2QUERY;
     struct newsqlheader hdr = {
-        .type = ntohl(CDB2_REQUEST_TYPE__CDB2QUERY), .compression = ntohl(0), .length = ntohl(len)};
+        .type = ntohl(hdr_type_dt), .compression = ntohl(0), .length = ntohl(len)};
 
     cdb2buf_write((char *)&hdr, sizeof(hdr), hndl->sb);
     cdb2buf_write((char *)buf, len, hndl->sb);
@@ -4430,7 +4491,7 @@ int cdb2_send_2pc(cdb2_hndl_tp *hndl, char *dbname, char *pname, char *ptier, ch
         free(p);
         return -1;
     }
-    CDB2DISTTXNRESPONSE *disttxn_response = cdb2__disttxnresponse__unpack(NULL, hdr.length, (const unsigned char *)p);
+    CDB2DISTTXNRESPONSE *disttxn_response = cdb2api_unpack_disttxnresponse(hndl, hdr.length, (const unsigned char *)p);
 
     if (disttxn_response == NULL) {
         cdb2buf_close(hndl->sb);
@@ -4470,12 +4531,18 @@ static int cdb2_effects_request(cdb2_hndl_tp *hndl)
     query.sqlquery = NULL;
     query.dbinfo = &dbinfoquery;
 
-    int len = cdb2__query__get_packed_size(&query);
-    unsigned char *buf = malloc(len + 1);
-
-    cdb2__query__pack(&query, buf);
-
-    struct newsqlheader hdr = {.type = ntohl(CDB2_REQUEST_TYPE__CDB2QUERY),
+    unsigned char *buf = NULL;
+    int len;
+    if (hndl->use_capnproto)
+        len = (int)capnp_pack_query(&query, (uint8_t **)&buf);
+    else {
+        len = cdb2__query__get_packed_size(&query);
+        buf = malloc(len + 1);
+        cdb2__query__pack(&query, buf);
+    }
+    int hdr_type_db2 = hndl->use_capnproto ? CAPNP_CDB2QUERY
+                                           : CDB2_REQUEST_TYPE__CDB2QUERY;
+    struct newsqlheader hdr = {.type = ntohl(hdr_type_db2),
                                .compression = ntohl(0),
                                .length = ntohl(len)};
 
@@ -4502,7 +4569,7 @@ retry_read:
         RESPONSE_HEADER__SQL_RESPONSE) { /* This might be the error that
                                             happened within transaction. */
         hndl->firstresponse =
-            cdb2__sqlresponse__unpack(NULL, len, hndl->first_buf);
+            cdb2api_unpack_sqlresponse(hndl, len, hndl->first_buf);
         hndl->error_in_trans = cdb2_convert_error_code(hndl->firstresponse->error_code);
         if (hndl->firstresponse->error_string)
             strcpy(hndl->errstr, hndl->firstresponse->error_string);
@@ -4519,7 +4586,7 @@ retry_read:
     }
 
     if (hndl->first_buf != NULL) {
-        hndl->firstresponse = cdb2__sqlresponse__unpack(NULL, len, hndl->first_buf);
+        hndl->firstresponse = cdb2api_unpack_sqlresponse(hndl, len, hndl->first_buf);
     } else {
         fprintf(stderr, "td 0x%p %s: Can't read response from the db\n",
                 (void *)pthread_self(), __func__);
@@ -4757,20 +4824,29 @@ static int cdb2_send_query(cdb2_hndl_tp *hndl, cdb2_hndl_tp *event_hndl, COMDB2B
     req_info.num_retries = retries_done;
     sqlquery.req_info = &req_info;
 
-    int len = cdb2__query__get_packed_size(&query);
-
     unsigned char *buf;
     int on_heap = 1;
-    if (trans_append || len > MAX_BUFSIZE_ONSTACK) {
-        buf = malloc(len + 1);
+    int len;
+
+    if (hndl && hndl->use_capnproto) {
+        uint8_t *capnp_buf = NULL;
+        len = (int)capnp_pack_query(&query, &capnp_buf);
+        buf = capnp_buf;
+        on_heap = 1;
     } else {
-        buf = alloca(len + 1);
-        on_heap = 0;
+        len = cdb2__query__get_packed_size(&query);
+        if (trans_append || len > MAX_BUFSIZE_ONSTACK) {
+            buf = malloc(len + 1);
+        } else {
+            buf = alloca(len + 1);
+            on_heap = 0;
+        }
+        cdb2__query__pack(&query, buf);
     }
 
-    cdb2__query__pack(&query, buf);
-
-    struct newsqlheader hdr = {.type = ntohl(CDB2_REQUEST_TYPE__CDB2QUERY),
+    int hdr_type = (hndl && hndl->use_capnproto) ? CAPNP_CDB2QUERY
+                                                  : CDB2_REQUEST_TYPE__CDB2QUERY;
+    struct newsqlheader hdr = {.type = ntohl(hdr_type),
                                .compression = ntohl(0),
                                .length = ntohl(len)};
 
@@ -4969,12 +5045,18 @@ retry_next_record:
 
     /* free previous response */
     if (hndl->lastresponse) {
-        cdb2__sqlresponse__free_unpacked(hndl->lastresponse, hndl->allocator);
-        if (hndl->protobuf_size)
-            hndl->protobuf_offset = 0;
+        if (hndl->use_capnproto)
+            capnp_free_response(hndl->lastresponse);
+        else {
+            cdb2api_free_sqlresponse(hndl, hndl->lastresponse);
+            if (hndl->protobuf_size)
+                hndl->protobuf_offset = 0;
+        }
     }
 
-    hndl->lastresponse = cdb2__sqlresponse__unpack(hndl->allocator, len, hndl->last_buf);
+    hndl->lastresponse = hndl->use_capnproto
+        ? capnp_unpack_sqlresponse(hndl->last_buf, len)
+        : cdb2__sqlresponse__unpack(hndl->allocator, len, hndl->last_buf);
     debugprint("hndl->lastresponse->response_type=%d\n",
                hndl->lastresponse->response_type);
 
@@ -5114,7 +5196,7 @@ int cdb2_get_effects(cdb2_hndl_tp *hndl, cdb2_effects_tp *effects)
             effects->num_updated = hndl->firstresponse->effects->num_updated;
             effects->num_deleted = hndl->firstresponse->effects->num_deleted;
             effects->num_inserted = hndl->firstresponse->effects->num_inserted;
-            cdb2__sqlresponse__free_unpacked(hndl->firstresponse, NULL);
+            cdb2api_free_sqlresponse(hndl, hndl->firstresponse);
             hndl->firstresponse = NULL;
             free((void *)hndl->first_buf);
             hndl->first_buf = NULL;
@@ -5216,14 +5298,14 @@ int cdb2_close(cdb2_hndl_tp *hndl)
     if (hndl->firstresponse) {
         free_raw_response(hndl);
         if (hndl->firstresponse)
-            cdb2__sqlresponse__free_unpacked(hndl->firstresponse, NULL);
+            cdb2api_free_sqlresponse(hndl, hndl->firstresponse);
         hndl->firstresponse = NULL;
         free((void *)hndl->first_buf);
         hndl->first_buf = NULL;
     }
 
     if (hndl->lastresponse) {
-        cdb2__sqlresponse__free_unpacked(hndl->lastresponse, hndl->allocator);
+        cdb2api_free_sqlresponse(hndl, hndl->lastresponse);
         if (hndl->protobuf_size)
             hndl->protobuf_offset = 0;
         hndl->lastresponse = NULL;
@@ -5420,7 +5502,7 @@ static int retry_queries(cdb2_hndl_tp *hndl, int num_retry, int run_last)
         hndl->sb = NULL;
         CDB2DBINFORESPONSE *dbinfo_response = NULL;
         dbinfo_response =
-            cdb2__dbinforesponse__unpack(NULL, len, hndl->first_buf);
+            cdb2api_unpack_dbinforesponse(hndl, len, hndl->first_buf);
         parse_dbresponse(dbinfo_response, hndl->hosts, hndl->ports,
                          &hndl->master, &hndl->num_hosts,
                          &hndl->num_hosts_sameroom, hndl->debug_trace,
@@ -5437,7 +5519,7 @@ static int retry_queries(cdb2_hndl_tp *hndl, int num_retry, int run_last)
     }
     if (hndl->first_buf != NULL) {
         hndl->firstresponse =
-            cdb2__sqlresponse__unpack(NULL, len, hndl->first_buf);
+            cdb2api_unpack_sqlresponse(hndl, len, hndl->first_buf);
     } else {
         snprintf(hndl->errstr, sizeof(hndl->errstr), "%s:%d Can't read response from the db\n", __func__, __LINE__);
         cdb2buf_close(hndl->sb);
@@ -5490,7 +5572,7 @@ static int retry_queries(cdb2_hndl_tp *hndl, int num_retry, int run_last)
         }
         if (hndl->first_buf != NULL) {
             hndl->firstresponse =
-                cdb2__sqlresponse__unpack(NULL, len, hndl->first_buf);
+                cdb2api_unpack_sqlresponse(hndl, len, hndl->first_buf);
         } else {
             snprintf(hndl->errstr, sizeof(hndl->errstr), "%s:%d Can't read response from the db\n", __func__, __LINE__);
             cdb2buf_close(hndl->sb);
@@ -5551,7 +5633,7 @@ static int retry_queries_and_skip(cdb2_hndl_tp *hndl, int num_retry,
 
     if (hndl->first_buf != NULL) {
         hndl->firstresponse =
-            cdb2__sqlresponse__unpack(NULL, len, hndl->first_buf);
+            cdb2api_unpack_sqlresponse(hndl, len, hndl->first_buf);
     }
 
     PRINT_AND_RETURN_OK(rc);
@@ -6418,7 +6500,7 @@ read_record:
             /* We got back info about nodes that might be coherent. */
             CDB2DBINFORESPONSE *dbinfo_resp = NULL;
             dbinfo_resp =
-                cdb2__dbinforesponse__unpack(NULL, len, hndl->first_buf);
+                cdb2api_unpack_dbinforesponse(hndl, len, hndl->first_buf);
             parse_dbresponse(dbinfo_resp, hndl->hosts, hndl->ports,
                              &hndl->master, &hndl->num_hosts,
                              &hndl->num_hosts_sameroom, hndl->debug_trace,
@@ -6614,7 +6696,7 @@ read_record:
     }
 
     // we have (hndl->first_buf != NULL)
-    hndl->firstresponse = cdb2__sqlresponse__unpack(NULL, len, hndl->first_buf);
+    hndl->firstresponse = cdb2api_unpack_sqlresponse(hndl, len, hndl->first_buf);
     if (!hndl->firstresponse) {
         err_val = CDB2ERR_CORRUPT_RESPONSE;
     }
@@ -7968,7 +8050,7 @@ again:
         rc = -1;
         goto after_callback;
     }
-    dbinfo_response = cdb2__dbinforesponse__unpack(NULL, hdr.length, (const unsigned char *)p);
+    dbinfo_response = cdb2api_unpack_dbinforesponse(hndl, hdr.length, (const unsigned char *)p);
 #ifdef CDB2API_TEST
     if (fail_dbinfo_no_response) {
         --fail_dbinfo_no_response;
@@ -9099,6 +9181,8 @@ int cdb2_open(cdb2_hndl_tp **handle, const char *dbname, const char *type,
             PROCESS_EVENT_CTRL_AFTER(hndl, e, rc, callbackrc);
         }
     }
+
+    hndl->use_capnproto = cdb2_use_capnproto;
 
     if (cdb2_protobuf_heuristic)
         hndl->protobuf_size = CDB2_PROTOBUF_HEURISTIC_INIT_SIZE;

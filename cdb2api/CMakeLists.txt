@@ -3,6 +3,9 @@ set(src
   cdb2api_ssl_test.c
   ${PROJECT_BINARY_DIR}/protobuf/sqlquery.pb-c.c
   ${PROJECT_BINARY_DIR}/protobuf/sqlresponse.pb-c.c
+  ${PROJECT_SOURCE_DIR}/protobuf/capnp_codec.cpp
+  ${PROJECT_BINARY_DIR}/protobuf/sqlquery.capnp.c++
+  ${PROJECT_BINARY_DIR}/protobuf/sqlresponse.capnp.c++
   ${PROJECT_SOURCE_DIR}/util/hostname_support.c
   ${PROJECT_SOURCE_DIR}/util/comdb2buf.c
   ${PROJECT_SOURCE_DIR}/util/ssl_glue.c
@@ -12,12 +15,15 @@ set(src
 set_source_files_properties(
   ${PROJECT_BINARY_DIR}/protobuf/sqlquery.pb-c.c
   ${PROJECT_BINARY_DIR}/protobuf/sqlresponse.pb-c.c
+  ${PROJECT_BINARY_DIR}/protobuf/sqlquery.capnp.c++
+  ${PROJECT_BINARY_DIR}/protobuf/sqlresponse.capnp.c++
   PROPERTIES GENERATED TRUE
 )
 
 include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${PROJECT_SOURCE_DIR}/bbinc
+  ${PROJECT_SOURCE_DIR}/protobuf
   ${PROJECT_SOURCE_DIR}/util
   ${PROJECT_BINARY_DIR}/protobuf
   ${PROTOBUF-C_INCLUDE_DIR}
@@ -39,9 +45,9 @@ if (COMDB2_BBCMAKE)
 else()
 
 add_library(cdb2api STATIC ${src})
-add_dependencies(cdb2api proto)
+add_dependencies(cdb2api proto capnp_schemas)
 target_compile_options(cdb2api PRIVATE -Wformat-security)
-target_link_libraries(cdb2api PUBLIC resolv)
+target_link_libraries(cdb2api PUBLIC resolv CapnProto::capnp)
 
 configure_file(cdb2api.pc cdb2api.pc @ONLY)
 install(TARGETS cdb2api ARCHIVE DESTINATION lib)
